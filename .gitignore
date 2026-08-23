@@ -1,0 +1,11 @@
+# IDE 私有数据(非项目产物)
+.zcode/
+.workbuddy/
+
+# 系统与编辑器临时文件
+*.log
+Thumbs.db
+.DS_Store
+
+# Godot 缓存(game/.gitignore 已覆盖,此处兜底)
+.godot/
