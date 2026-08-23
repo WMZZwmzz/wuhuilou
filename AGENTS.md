@@ -49,5 +49,5 @@ powershell -NoProfile -ExecutionPolicy Bypass -File game/qa/brightgrid.ps1 game/
 
 ## 其他
 
-- 非 git 仓库,无版本控制;删除/覆盖文件前先确认内容。
+- git 仓库(分支 `main`,远程 GitHub:https://github.com/WMZZwmzz/wuhuilou);删除/覆盖文件前先确认内容。
 - 路径含中文(工作区名 `无回楼`),shell 命令注意加引号。
