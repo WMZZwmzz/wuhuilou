@@ -9,3 +9,9 @@ Thumbs.db
 
 # Godot 缓存(game/.gitignore 已覆盖,此处兜底)
 .godot/
+
+# IDE 私有数据补充
+.trae/
+
+# 损坏旧库的临时备份,确认无误后删除本行与目录
+.git.broken/

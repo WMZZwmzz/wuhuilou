@@ -28,6 +28,7 @@ GODOT="/c/Users/PC/Desktop/Godot_v4.7.2-stable_win64.exe"
 "$GODOT" --headless --path game --script res://qa/qa_runner.gd   # 无头断言,退出码 0 = 全过
 "$GODOT" --path game --script res://qa/qa_runner.gd              # 带渲染复跑,截图存 game/qa/shots/
 powershell -NoProfile -ExecutionPolicy Bypass -File game/qa/brightgrid.ps1 game/qa/shots/02-1f-lobby.png   # 截图亮度网格,验证非黑屏
+powershell -NoProfile -ExecutionPolicy Bypass -File game/qa/uicheck.ps1                                    # 像素级 UI 特征断言(标题朱砂行/CRT 扫描线/弹窗纸纹/死亡红带/结局亮像素)
 ```
 
 改动 game/ 后必须跑无头走查,确认输出「失败项: 无 —— 全部通过 ✓」且零 `SCRIPT ERROR`。改动/新增 `game/sounds/` 下音频后须先跑 `--import` 再跑 QA(QA 收尾断言外部音效加载数)。
