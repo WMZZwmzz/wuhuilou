@@ -41,8 +41,8 @@ static func build(m) -> void:
 			"choices": [{"text": "接过念珠", "fn": func() -> void:
 				m.close_modal()
 				m.gain_relic("一串念珠")
-				m.get_tree().create_timer(2.8).timeout.connect(func(): m.gain_card("12F"))
-				m.get_tree().create_timer(5.8).timeout.connect(func() -> void:
+				m.after(2.8, func(): m.gain_card("12F"))
+				m.after(5.8, func() -> void:
 					m.change_sanity(2.0)
 					m.H.show_msg("\"封印没完成,是我的债。现在,轮到你了。\"\n王桂枝的身影拜了一拜,散作点点微光。理智 +2", 6.2))
 				m.H.set_objective("权限卡12F到手。乘电梯前往 12F 天台")}],
@@ -56,20 +56,20 @@ static func build(m) -> void:
 				m.close_modal()
 				m.G.flags["photoGiven"] = true
 				m.H.show_msg("照片离开手心的一瞬,胸口空了一块。", 4.2)
-				m.get_tree().create_timer(2.2).timeout.connect(func(): do_sacrifice.call("妹妹的照片"))},
+				m.after(2.2, func(): do_sacrifice.call("妹妹的照片"))},
 		]
 		if m.G.batteries >= 2:
 			ch.append({"text": "献上电池 ×2", "fn": func() -> void:
 				m.close_modal()
 				m.G.batteries -= 2
-				m.get_tree().create_timer(1.6).timeout.connect(func(): do_sacrifice.call("两节电池"))})
+				m.after(1.6, func(): do_sacrifice.call("两节电池"))})
 		else:
 			ch.append({"text": "献上电池 ×2", "disabled": true, "reason": "数量不足"})
 		if m.G.candles >= 1:
 			ch.append({"text": "献上香烛 ×1", "fn": func() -> void:
 				m.close_modal()
 				m.G.candles -= 1
-				m.get_tree().create_timer(1.6).timeout.connect(func(): do_sacrifice.call("一支香烛"))})
+				m.after(1.6, func(): do_sacrifice.call("一支香烛"))})
 		else:
 			ch.append({"text": "献上香烛 ×1", "disabled": true, "reason": "没有香烛"})
 		ch.append({"text": "转身离开", "fn": func() -> void: m.close_modal()})

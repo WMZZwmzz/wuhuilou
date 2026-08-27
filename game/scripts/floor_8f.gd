@@ -6,7 +6,7 @@ static func build(m) -> void:
 	FloorCommon.room_shell(m, 20.0, 16.0)
 	FloorCommon.build_elevator(m)
 	m.add_light(Color.html("d8d0a0"), 0.4, 12.0, 0, 2.9, -2.0, 0.18)
-	m.add_light(Color.html("c8c098"), 0.3, 8.0, 6.5, 2.4, 4.0, 0.22)
+	m.add_light(Color.html("c8c098"), 0.3, 8.0, 6.5, 2.4, 4.0, 0.22, false)
 	# 铁皮柜两排(迷宫式掩体):北排朝南,中排朝北
 	var cab_poses: Array = [
 		[-6.0, -4.5, 0.0], [-2.0, -4.5, 0.0], [2.0, -4.5, 0.0], [6.0, -4.5, 0.0],
@@ -19,7 +19,7 @@ static func build(m) -> void:
 	Props.wood_desk(m, 7.5, 4.5, -PI / 2.0, 2.2, 1.0, 0.85, "5a4e3a")
 	m.colliders.append(Rect2(7.5 - 0.5, 4.5 - 1.1, 1.0, 2.2))
 	m.safe_spot(7.5, 4.5, 1.8)
-	m.add_light(Color.html("e8c890"), 0.5, 5.0, 6.6, 1.5, 4.5, 0.06)
+	m.add_light(Color.html("e8c890"), 0.5, 5.0, 6.6, 1.5, 4.5, 0.06, false)
 	# 档案柜甲:住户档案(氛围)
 	m.add_inter(Vector3(-6.0, 1.2, -3.9), "住户档案柜", func() -> void:
 		m.open_modal({
@@ -76,8 +76,8 @@ static func build(m) -> void:
 			"choices": [{"text": "收下档案袋", "fn": func() -> void:
 				m.close_modal()
 				m.gain_relic("牛皮档案袋")
-				m.get_tree().create_timer(2.6).timeout.connect(func(): m.gain_card("9F"))
-				m.get_tree().create_timer(5.6).timeout.connect(func() -> void:
+				m.after(2.6, func(): m.gain_card("9F"))
+				m.after(5.6, func() -> void:
 					m.change_sanity(2.0)
 					m.H.show_msg("\"档案能改,日期能改,唯独事实改不了。这楼吃人,是真的。\"\n沈如梅的身影在柜间一闪,散成纸屑一样的光。理智 +2", 6.2))
 				m.H.set_objective("权限卡9F到手。乘电梯前往 9F 镜像层")}],

@@ -22,7 +22,10 @@ static func build(m) -> void:
 		var p: Array = car_poses[i]
 		Props.sedan_car(m, p[0], p[1], p[2], ["3a4048", "4a3a34", "33413c", "3c3c46"][i])
 		m.colliders.append(Rect2(p[0] - 0.95, p[1] - 2.15, 1.9, 4.3))
-		var cl: OmniLight3D = m.add_light(Color.html("e8e2c8"), 0.0, 7.0, p[0], 0.9, p[1] + (1.9 if p[2] < PI else -1.9), 0.0)
+		var cl: OmniLight3D = m.add_light(Color.html("e8e2c8"), 0.7, 7.0, p[0], 0.9, p[1] + (1.9 if p[2] < PI else -1.9), 0.0, false)
+		# 随机亮灭的装饰灯:平时整灯 visible=false——不可见灯光不进光列表也不占阴影图集,
+		# 比 energy=0 更彻底(能量为零仍参与每帧阴影 pass 渲染)
+		cl.visible = false
 		car_lights.append(cl)
 	# 车内电池(西排前车,车窗摇下一半)
 	var batB1 := Props.battery_prop(m)
@@ -42,64 +45,34 @@ static func build(m) -> void:
 	m.add_wall(7.9, 5.9, 3.8, 0.3)
 	m.add_box(1.2, 0.9, 0.5, m.pmat({"color": Color.html("4a4438"), "roughness": 0.8}), 8.6, 0.45, 4.8)
 	m.colliders.append(Rect2(8.0, 4.55, 1.2, 0.5))
-	m.add_light(Color.html("c8a86a"), 0.35, 4.0, 8.6, 2.2, 4.8, 0.1)
-	# 老周:保安服 + 大串钥匙;所有子件不投影(无影子)
-	var zhou := Node3D.new()
-	var uni: StandardMaterial3D = m.pmat({"color": Color.html("2c3444"), "roughness": 0.9})
-	var zskin: StandardMaterial3D = m.pmat({"color": Color.html("8a7a62"), "roughness": 0.85})
-	var parts: Array = []
-	var zb := MeshInstance3D.new()
-	var zbc := CylinderMesh.new()
-	zbc.top_radius = 0.24
-	zbc.bottom_radius = 0.3
-	zbc.height = 1.25
-	zb.mesh = zbc
-	zb.material_override = uni
-	zb.position = Vector3(0, 0.85, 0)
-	zhou.add_child(zb)
-	parts.append(zb)
-	var zh := MeshInstance3D.new()
-	var zhs := SphereMesh.new()
-	zhs.radius = 0.15
-	zhs.height = 0.3
-	zh.mesh = zhs
-	zh.material_override = zskin
-	zh.position = Vector3(0, 1.66, 0)
-	zhou.add_child(zh)
-	parts.append(zh)
-	var zcap := MeshInstance3D.new()
-	var zcbc := CylinderMesh.new()
-	zcbc.top_radius = 0.16
-	zcbc.bottom_radius = 0.16
-	zcbc.height = 0.06
-	zcap.mesh = zcbc
-	zcap.material_override = m.pmat({"color": Color.html("1e2430"), "roughness": 0.8})
-	zcap.position = Vector3(0, 0.12, 0)
-	zh.add_child(zcap)
-	parts.append(zcap)
+	m.add_light(Color.html("c8a86a"), 0.35, 4.0, 8.6, 2.2, 4.8, 0.1, false)
+	# 老周:保安服 + 保安帽 + 腰带 + 大串钥匙;全部件不投影(无影子)
+	var fig := Props.human_figure(m, {
+		"pose": "stand", "scale": 1.03, "face": "human", "no_shadow": true, "uniform": true,
+		"cap_hex": "1e2430",
+		"top_hex": "2c3444", "bottom_hex": "222a38", "skin_hex": "8a7a62", "hair_hex": "3a342c",
+	})
+	var zhou: Node3D = fig["root"]
+	# 腰带 + 右胯钥匙串(同样无影)
+	var belt := MeshInstance3D.new()
+	var btm := TorusMesh.new()
+	btm.inner_radius = 0.138
+	btm.outer_radius = 0.158
+	belt.mesh = btm
+	belt.material_override = m.pmat({"color": Color.html("1a1e26"), "roughness": 0.8})
+	belt.position = Vector3(0, 1.02, 0)
+	belt.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	zhou.add_child(belt)
 	var keys := MeshInstance3D.new()
 	var kc := TorusMesh.new()
 	kc.inner_radius = 0.05
 	kc.outer_radius = 0.09
 	keys.mesh = kc
 	keys.material_override = m.pmat({"color": Color.html("c8b46a"), "metallic": 0.7, "roughness": 0.4})
-	keys.position = Vector3(0.26, 0.95, 0.06)
+	keys.position = Vector3(0.24, 0.93, 0.05)
 	keys.rotation.x = PI / 2.0
+	keys.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	zhou.add_child(keys)
-	parts.append(keys)
-	for sx: float in [-0.08, 0.08]:
-		var leg := MeshInstance3D.new()
-		var lc := CylinderMesh.new()
-		lc.top_radius = 0.055
-		lc.bottom_radius = 0.055
-		lc.height = 0.5
-		leg.mesh = lc
-		leg.material_override = uni
-		leg.position = Vector3(sx, 0.25, 0)
-		zhou.add_child(leg)
-		parts.append(leg)
-	for pm: MeshInstance3D in parts:
-		pm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	zhou.position = Vector3(0, 0, 5.0)
 	m.floor_root.add_child(zhou)
 	var state := {
@@ -127,8 +100,8 @@ static func build(m) -> void:
 		m.add_game_minutes(10)
 		m.gain_relic("一大串钥匙")
 		m.S.click()
-		m.get_tree().create_timer(2.6).timeout.connect(func(): m.gain_card("B2"))
-		m.get_tree().create_timer(5.6).timeout.connect(func() -> void:
+		m.after(2.6, func(): m.gain_card("B2"))
+		m.after(5.6, func() -> void:
 			m.change_sanity(2.0)
 			m.H.show_msg("老周没有回头,只是站定了,像卸下千斤重担:\n\"拿去吧……这差事,我早就想卸了。\"\n\"那把旧的,是 1304 的门。我找了一辈子,没能打开它。\"理智 +2", 7.0))
 		m.H.set_objective("出口钥匙到手。乘电梯下行 B2 锅炉房 —— 结束这一切")
@@ -151,7 +124,7 @@ static func build(m) -> void:
 			for i in car_lights.size():
 				var cl: OmniLight3D = car_lights[i]
 				if is_instance_valid(cl):
-					cl.light_energy = 1.4 if i == li else 0.0
+					cl.visible = (i == li)   # 明灭切换用整灯 visible,能量恒 1.4
 			if randf() < 0.4:
 				m.S.click()
 		if not is_instance_valid(zhou):
@@ -204,12 +177,13 @@ static func build(m) -> void:
 					state["mode"] = "patrol"
 					state["wp"] = 0
 					zhou.position = wps[0]
-					m.change_sanity(-25.0)
+					var caught_drain := 25.0   # 被抓一次性扣值(数值平衡表"接触性事件"档;文案同源)
+					m.change_sanity(-caught_drain)
 					m.H.red_flash()
 					m.S.sting()
 					m.shake = 2.4
 					m.player_pos = Vector3(0, 0, 7.5)
-					m.H.show_msg("冰凉的手攥住你的手腕,把你\"请\"回了电梯厅。\n\"楼里不许跑。\"理智 −25", 5.4)
+					m.H.show_msg("冰凉的手攥住你的手腕,把你\"请\"回了电梯厅。\n\"楼里不许跑。\"理智 −%d" % int(caught_drain), 5.4)
 			"invest":
 				var dirn: Vector3 = NOISE_POINT - zhou.position
 				dirn.y = 0.0
@@ -221,6 +195,11 @@ static func build(m) -> void:
 					state["invest_t"] = state["invest_t"] - dt
 					if state["invest_t"] <= 0.0:
 						state["mode"] = "patrol"
+		# 巡逻/追逐时的步行起伏(其余状态站稳)
+		if state["mode"] == "patrol" or state["mode"] == "chase":
+			zhou.position.y = abs(sin(Time.get_ticks_msec() * 0.011)) * 0.02
+		else:
+			zhou.position.y = 0.0
 	m.tp_list([
 		{"x": 8.6, "z": 3.4, "yaw": PI},
 		{"x": -8.6, "z": -5.4, "yaw": 0.0},

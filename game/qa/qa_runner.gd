@@ -629,6 +629,59 @@ func _run() -> void:
 	check("6:00 时限 → Game Over", m.H.gameover_screen.visible)
 	await shot("gameover-time")
 
+	# ---------- 25. 回归(E3/D5):乘梯途中锁旧楼层交互 ----------
+	await reload_scene()
+	await wait_s(0.5)
+	m._on_start()
+	await wait_s(0.8)
+	var tps: Array = m.G.get_meta("_tp", [])
+	m.tp(tps.size() - 1)
+	await wait_s(0.3)
+	check("呼梯面板可交互(前置)", m.current_inter != null)
+	m.ride_to("2F", true)   # 直接发起乘梯:同步置 riding 后挂起在转场等待里
+	await wait_s(0.3)
+	check("乘梯中 riding 生效且交互提示清空", m.G.riding and m.current_inter == null)
+	m.interact_press()      # 站在面板上按 E:修复前会再开一层面板、双程竞态
+	await wait_s(0.2)
+	check("乘梯中按 E 不弹新窗", not m.G.modal_open)
+	await wait_s(3.0)
+	check("乘梯正常抵达且状态复位", m.G.floor_id == "2F" and not m.G.riding and not m.G.modal_open)
+
+	# ---------- 26. 回归(E1/E4):ESC 真暂停 + 失焦卡键兜底 ----------
+	await reload_scene()
+	await wait_s(0.5)
+	m._on_start()
+	await wait_s(0.8)
+	m.G.battery = 88.0
+	m.G.flash_on = true     # 开灯保证恢复后结算可观测(耗电 1/秒)
+	var p_bat: float = m.G.battery
+	var p_time: float = m.G.time
+	var p_pos: Vector3 = m.player_pos
+	m.pause_game()
+	m.keys[KEY_W] = true    # 复现"按住 W 时按 ESC"
+	await wait_s(1.5)
+	check("暂停冻结(时间/电量/位移不变)",
+		m.G.paused and m.G.time == p_time and m.G.battery == p_bat and m.player_pos == p_pos)
+	m.resume_game()
+	check("恢复退出暂停并清空按键", not m.G.paused and m.keys.is_empty())
+	await wait_s(0.7)
+	check("恢复后结算恢复(电量下降)", m.G.battery < p_bat)
+	m.keys[KEY_W] = true
+	m.notification(Node.NOTIFICATION_APPLICATION_FOCUS_OUT)
+	check("失焦清空按键(E4 兜底)", m.keys.is_empty())
+
+	# ---------- 27. 回归(E2/D5):结局触发瞬间不被 6:00 死亡顶掉 ----------
+	await reload_scene()
+	await wait_s(0.5)
+	m._on_start()
+	await wait_s(0.5)
+	m.G.time = 350.0
+	var d_end: int = m.G.deaths
+	m.start_ending("true")
+	await wait_s(0.4)
+	check("结局画面出现且无死亡画面顶盖",
+		m.H.ending_screen.visible and not m.H.gameover_screen.visible and m.G.deaths == d_end and not m.G.playing)
+
 	# ---------- 汇总 ----------
 	print("\n===== 汇总 =====")
 	check("外部音效资源加载 ≥12 项(实际 %d,若为 0 检查 --import)" % m.S.ext_loaded, m.S.ext_loaded >= 12)

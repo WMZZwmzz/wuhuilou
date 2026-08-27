@@ -42,6 +42,12 @@ static func _tor(ir: float, orr: float) -> TorusMesh:
 	t.outer_radius = orr
 	return t
 
+static func _cap(r: float, h: float) -> CapsuleMesh:
+	var c := CapsuleMesh.new()
+	c.radius = r
+	c.height = maxf(h, r * 2.0 + 0.02)
+	return c
+
 static func _root(m, x: float, z: float, ry := 0.0) -> Node3D:
 	var n := Node3D.new()
 	n.position = Vector3(x, 0, z)
@@ -310,7 +316,8 @@ static func incense_burner(m, x: float, y: float, z: float) -> Dictionary:
 		root.add_child(pivot)
 		_mi(pivot, _cyl(0.02, 0.026, 0.12, 10), bronze, Vector3(0.105, 0.05, 0), Vector3(0, 0, -0.24))
 	var stick_mat: StandardMaterial3D = m.pmat({"color": Color.html("c8b894"), "roughness": 0.9})
-	var tip_mat: StandardMaterial3D = m.pmat({"color": Color.html("3a2c22"), "emission": Color.html("241812"), "emission_energy": 0.05})
+	var tip_mat: StandardMaterial3D = m.pmat({"color": Color.html("3a2c22"), "emission": Color.html("241812"), "emission_energy": 0.05,
+		"no_cache": true})   # 7F 解谜后会把 emission 改为红亮,不能与其他实例共享
 	var tips: Array = []
 	for i in 3:
 		var ang := PI / 2.0 + i * TAU / 3.0 + 0.5
@@ -529,21 +536,46 @@ static func mirror_stand(m, x: float, z: float, ry := 0.0, face_mat: Material = 
 		_mi(root, _box(0.05, 0.05, 0.1), frame, Vector3(sx, 0.03, 0))
 	return root
 
-## 宴席假人(10F):坐姿躯干 + 头 + 肩球,布料色可调;胸牌由楼层另贴
-static func banquet_dummy(m, x: float, z: float, ry := 0.0, cloth_hex := "46384a") -> Node3D:
+## 通用参数化人形(程序化雕刻网格):委托 Humanoid.build,骨架枢轴与旧版一致。
+## 约定:人物正面朝 -Z(与 look_at 前向一致);返回的 root 不入树,由调用方 add_child 并摆位。
+## cfg 键(均有默认):
+##   pose:"stand" 站 | "sit" 坐(座面高 0.45)| "slump" 瘫坐前倾;scale 整体缩放(1.0≈站高 1.75m)
+##   hunch: 0~1 老年驼背;no_shadow: 全部件不投影;hair: "short"|"bun"|"bald"
+##   face: "human" 五官 | "hollow" 凹眼张嘴(尸)| "blank" 无脸白板 | "none" 光脸(假人)
+##   robe: 长衫裙摆遮腿;skirt: 锥裙遮腿;legless: 仅上半身(髋为根,供底座挂载)
+##   plastic: 光面清漆材质(假人/教学模型);cap_hex: 非空则戴保安帽;其余为配色 hex
+##   新增:apron 围裙(配 skirt)| polo 网管服(领座+短袖)| uniform 保安服细节 |
+##        silhouette 黑色剪影体(unshaded 半透明,sil_alpha 控透明度)
+## 返回 {"root","head","arm_l","arm_r","fore_l","fore_r","hand_l","hand_r"}
+static func human_figure(m, cfg := {}) -> Dictionary:
+	return Humanoid.build(m, cfg)
+
+## 宴席假人(10F):光面塑料假人,坐姿双手搭桌沿;胸牌由楼层另贴;stand=主位立姿司仪。
+## merged=true 时摆姿后把整个子树合并为单 MeshInstance(静态肢体,A4;跨实例共享缓存网格,
+## cache_key 含全部外观因子)。合并后不可再动骨架(fig["arm_r"] 等引用失效)。
+static func banquet_dummy(m, x: float, z: float, ry := 0.0, cloth_hex := "46384a", stand := false, merged := false) -> Node3D:
 	var root := _root(m, x, z, ry)
-	var cloth: StandardMaterial3D = m.pmat({"color": Color.html(cloth_hex), "roughness": 0.92})
-	var skin: StandardMaterial3D = m.pmat({"color": Color.html("a89a86"), "roughness": 0.85})
-	_mi(root, _cyl(0.17, 0.22, 0.62), cloth, Vector3(0, 0.31, 0))
-	for sx: float in [-0.1, 0.1]:
-		_mi(root, _cyl(0.055, 0.055, 0.5), cloth, Vector3(sx, 0.25, 0.24), Vector3(PI / 2.0, 0, 0))
-		_mi(root, _cyl(0.05, 0.05, 0.48), cloth, Vector3(sx, 0.24, 0.46))
-	for sx: float in [-0.2, 0.2]:
-		_mi(root, _sph(0.075), cloth, Vector3(sx, 0.58, 0))
-		_mi(root, _cyl(0.04, 0.04, 0.3), cloth, Vector3(sx * 1.35, 0.5, 0), Vector3(0, 0, 0.7))
-	_mi(root, _cyl(0.05, 0.055, 0.1), skin, Vector3(0, 0.64, 0))
-	_mi(root, _sph(0.135), skin, Vector3(0, 0.78, 0.01))
+	var fig := human_figure(m, {
+		"pose": "stand" if stand else "sit",
+		"face": "none", "hair": "bald", "plastic": true,
+		"top_hex": cloth_hex, "bottom_hex": cloth_hex, "skin_hex": "a89a86",
+	})
+	var body: Node3D = fig["root"]
+	root.add_child(body)
+	if stand:
+		# 司仪:右手半举,对着空无一人的新娘位示意
+		fig["arm_r"].rotation.x = 0.45
+		fig["fore_r"].rotation.x = 1.5
+	else:
+		fig["fore_l"].rotation.x = 1.22
+		fig["fore_r"].rotation.x = 1.36
+	if merged:
+		Humanoid.merge_static(body, "banquet:%s:%s:%s" % [cloth_hex, str(stand), str(_root_uq(m))])
 	return root
+
+## 合并缓存的楼层隔离后缀:避免不同楼层的材质实例(同签名但不同 m.pmat 缓存)串用
+static func _root_uq(m) -> int:
+	return m.get_instance_id()
 
 ## 轿车(B1):两层车身 + 四轮 + 深色车窗;无车牌(设定)
 static func sedan_car(m, x: float, z: float, ry := 0.0, body_hex := "3a4048") -> Node3D:

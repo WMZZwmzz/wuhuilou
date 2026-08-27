@@ -80,7 +80,7 @@ const ANOMALIES := [
 			{"text": "直视镜子,看个清楚", "wrong": true},
 			{"text": "立刻移开视线,不再看它", "correct": true},
 			{"text": "一拳砸碎镜子", "wrong": true}],
-		"wrongText": "镜中的你先笑了。碎裂的镜面里,每一块碎片都有一只眼睛。理智 −15",
+		"wrongText": "镜中的你先笑了。碎裂的镜面里,每一块碎片都有一只眼睛。",
 		"correctText": "你低下头数着自己的呼吸。再看时,镜子里只剩你自己,动作分毫不差。"},
 	{"title": "门迟迟不开",
 		"body": "\"叮——\"电梯已经停靠,门却迟迟不开。\n门缝外一片死寂。\n\n(住户须知四:若停靠后门迟迟不开,请闭眼、背对门站立。)",
@@ -164,17 +164,28 @@ var H: Hud
 var camera: Camera3D
 var flash: SpotLight3D
 var body_glow: OmniLight3D
+var viewmodel: Node3D            # 第一人称右手(手持手电)
+var vm_lens: StandardMaterial3D  # 手电透镜(开关同步发光)
+var _vm_t := 0.0                # 摆动相位
+var _vm_sway := Vector2.ZERO    # 转向惯性
+var _vm_dip := 0.0              # 开关手电抬落脉冲
+var _vm_flash_prev := false
+var _vm_prev_yaw := 0.0
+var _vm_prev_pitch := 0.0
 
 var floor_root: Node3D
 var colliders: Array = []          # Rect2 列表(x0,z0,w,d)
 var interactables: Array = []      # {pos, label, cb, radius, cond}
 var floor_update: Callable = Callable()
 var lights: Array = []             # {l, base, flicker}
+var flicker_lights: Array = []     # 仅带闪烁的灯(大多数楼层只有 0-3 盏,避免每帧遍历全部)
 var dyn_lights := {}
 var safe_spots: Array = []
 var elevator_doors := {}
 var fake_exit_obj: MeshInstance3D = null
 var current_inter = null
+var _prompt_label := ""            # 交互目标标签缓存:变化才拼 "[E] …" 字符串
+var _shadow_mat: StandardMaterial3D  # 低理智影子剪影共用材质(无状态差异,建一次复用)
 
 # 玩家(QA 直接访问)
 var player_pos := Vector3(0, 0, 6.2)
@@ -201,6 +212,10 @@ func _ready() -> void:
 	G = GameState.new()
 	T = TexGen.new()
 	await T.prepare()
+	_shadow_mat = StandardMaterial3D.new()
+	_shadow_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_shadow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_shadow_mat.albedo_color = Color(0, 0, 0, 0.85)
 	S = Sfx.new()
 	add_child(S)
 	H = Hud.new()
@@ -211,7 +226,7 @@ func _ready() -> void:
 	H.restart_requested.connect(func(): get_tree().reload_current_scene())
 	H.retry_requested.connect(func(): _on_retry())
 	H.to_title_requested.connect(func(): get_tree().reload_current_scene())
-	H.pause_resumed.connect(func(): _capture_mouse())
+	H.pause_resumed.connect(func(): resume_game())
 	build_floor("1F")
 	if DEBUG:
 		_build_debug_bar()
@@ -224,14 +239,22 @@ func _build_camera() -> void:
 	camera.far = 60.0
 	add_child(camera)
 	camera.current = true
+	# 第一人称视图模型:右手持手电(程序化雕刻),手电灯挂筒头随手动
+	var vm := Humanoid.build_viewmodel(self)
+	viewmodel = vm["root"]
+	vm_lens = vm["lens"]
+	viewmodel.position = Vector3(0.24, -0.26, -0.42)
+	viewmodel.rotation = Vector3(0.04, -0.06, 0.0)
+	viewmodel.visible = false
+	camera.add_child(viewmodel)
 	flash = SpotLight3D.new()
 	flash.light_color = Color.html("fff2d0")
 	flash.spot_range = 22.0
 	flash.spot_angle = 24.0
 	flash.light_energy = 6.0
 	flash.shadow_enabled = true
-	flash.position = Vector3(0.12, -0.12, 0)
-	camera.add_child(flash)
+	flash.position = Vector3(0, 0.02, -0.16)
+	viewmodel.add_child(flash)
 	flash.visible = false
 	body_glow = OmniLight3D.new()
 	body_glow.light_color = Color.html("8090a0")
@@ -244,17 +267,16 @@ func _build_camera() -> void:
 func _process(delta: float) -> void:
 	var dt := minf(0.05, delta)
 	if floor_root:
-		if G.playing and not G.modal_open:
+		if G.playing and not G.paused and not G.modal_open:
 			update_player(dt)
 			update_interact()
 			update_atmosphere(dt)
 			if floor_update.is_valid():
 				floor_update.call(dt)
 			var now := Time.get_ticks_msec()
-			for L: Dictionary in lights:
-				if L["flicker"] > 0.0:
-					var n := sin(now * 0.013 + (L["l"] as Node3D).position.x * 7.0) * sin(now * 0.007)
-					L["l"].light_energy = L["base"] * (1.0 - L["flicker"] * maxf(0.0, n))
+			for L: Dictionary in flicker_lights:
+				var n := sin(now * 0.013 + (L["l"] as Node3D).position.x * 7.0) * sin(now * 0.007)
+				L["l"].light_energy = L["base"] * (1.0 - L["flicker"] * maxf(0.0, n))
 			if not dyn_lights.is_empty():
 				var ts := now * 0.001
 				dyn_lights["warm"].position = Vector3(sin(ts * 0.13) * 4.5, 2.5 + sin(ts * 0.21) * 0.3, cos(ts * 0.17) * 4.0)
@@ -263,6 +285,42 @@ func _process(delta: float) -> void:
 				dyn_lights["cool"].light_energy = 0.54 * (0.9 + 0.1 * sin(ts * 0.5 + 1.7))
 			_settle(dt)
 		H.render_hud(G)
+	_update_viewmodel(dt)
+
+# ---------- 第一人称视图模型 ----------
+
+func _update_viewmodel(dt: float) -> void:
+	if viewmodel == null:
+		return
+	viewmodel.visible = G.playing and G.has_flash
+	if vm_lens != null:
+		vm_lens.emission_energy_multiplier = 5.0 if (G.flash_on and G.battery > 0.0) else 0.0
+	# 开关手电 → 抬落手脉冲(QA 直改 G.flash_on 同样覆盖)
+	if G.flash_on != _vm_flash_prev:
+		_vm_flash_prev = G.flash_on
+		_vm_dip = 1.0
+	_vm_dip = maxf(0.0, _vm_dip - dt * 6.0)
+
+func _update_viewmodel_motion(dt: float, moving: bool, running: bool, crouching: bool) -> void:
+	if viewmodel == null or not viewmodel.visible:
+		return
+	var bob_speed := 2.0
+	if moving:
+		bob_speed = 11.0 if running else 7.5
+	_vm_t += dt * bob_speed
+	var amp := 0.012 if moving else 0.004
+	# 转向惯性:视角角速度反向缓动
+	var dy := player_yaw - _vm_prev_yaw
+	var dp := player_pitch - _vm_prev_pitch
+	_vm_prev_yaw = player_yaw
+	_vm_prev_pitch = player_pitch
+	_vm_sway = _vm_sway.lerp(Vector2(clampf(-dy * 2.0, -0.03, 0.03), clampf(dp * 2.0, -0.03, 0.03)), clampf(dt * 8.0, 0.0, 1.0))
+	var base := Vector3(0.24, -0.26, -0.42)
+	if crouching:
+		base.y -= 0.03
+	var dip := sin(_vm_dip * PI) * 0.05 * _vm_dip
+	viewmodel.position = base + Vector3(cos(_vm_t * 0.5) * amp * 0.6, sin(_vm_t) * amp - dip, 0.0)
+	viewmodel.rotation = Vector3(0.04 - _vm_sway.y, -0.06 + _vm_sway.x, -_vm_sway.x * 0.5)
 
 func _settle(dt: float) -> void:
 	var in_safe := false
@@ -301,16 +359,17 @@ func _settle(dt: float) -> void:
 func _key(k: Key) -> bool:
 	return keys.get(k, false)
 
+func _free_at(nx: float, nz: float) -> bool:
+	for r: Rect2 in colliders:
+		if nx > r.position.x - PLAYER_R and nx < r.position.x + r.size.x + PLAYER_R \
+				and nz > r.position.y - PLAYER_R and nz < r.position.y + r.size.y + PLAYER_R:
+			return false
+	return true
+
 func try_move(dx: float, dz: float) -> void:
-	var _ok := func(nx: float, nz: float) -> bool:
-		for r: Rect2 in colliders:
-			if nx > r.position.x - PLAYER_R and nx < r.position.x + r.size.x + PLAYER_R \
-					and nz > r.position.y - PLAYER_R and nz < r.position.y + r.size.y + PLAYER_R:
-				return false
-		return true
-	if _ok.call(player_pos.x + dx, player_pos.z):
+	if _free_at(player_pos.x + dx, player_pos.z):
 		player_pos.x += dx
-	if _ok.call(player_pos.x, player_pos.z + dz):
+	if _free_at(player_pos.x, player_pos.z + dz):
 		player_pos.z += dz
 
 func cam_forward() -> Vector3:
@@ -361,9 +420,15 @@ func update_player(dt: float) -> void:
 	cam_h = lerpf(cam_h, 0.95 if crouching else 1.62, clampf(dt * 10.0, 0.0, 1.0))
 	camera.position = Vector3(player_pos.x, cam_h + shake_y, player_pos.z)
 	camera.rotation = Vector3(player_pitch, player_yaw, roll)
+	_update_viewmodel_motion(dt, moving, running, crouching)
 
 func keys_reset() -> void:
 	keys.clear()
+
+## 失焦兜底:切走窗口后收不到松键事件,按住的键会永久卡住(角色自动前行)
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		keys_reset()
 
 # ---------- 交互 ----------
 
@@ -372,6 +437,11 @@ func add_inter(pos: Vector3, label: String, cb: Callable, radius := 2.4, cond: C
 
 func update_interact() -> void:
 	current_inter = null
+	if G.riding:
+		if _prompt_label != "":
+			_prompt_label = ""
+			H.set_prompt("")
+		return
 	var fwd := -camera.global_transform.basis.z
 	var best = null
 	var best_d := 1e9
@@ -389,9 +459,14 @@ func update_interact() -> void:
 			best_d = dist
 			best = it
 	current_inter = best
-	H.set_prompt("[E] " + best["label"] if best else "")
+	var lbl: String = best["label"] if best else ""
+	if lbl != _prompt_label:
+		_prompt_label = lbl
+		H.set_prompt("[E] " + lbl if lbl != "" else "")
 
 func interact_press() -> void:
+	if G.riding:
+		return
 	if current_inter:
 		S.click()
 		current_inter["cb"].call()
@@ -407,12 +482,12 @@ func _unhandled_input(event: InputEvent) -> void:
 					var m := S.toggle_mute()
 					H.show_msg("已静音" if m else "声音开启", 1.5)
 					return
-			if not G.playing:
+			if not G.playing or G.paused:
 				return
 			keys[k] = true
 			match k:
 				KEY_E:
-					if not G.modal_open and current_inter:
+					if not G.modal_open and not G.riding and current_inter:
 						interact_press()
 				KEY_F:
 					if not G.modal_open:
@@ -428,9 +503,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				KEY_3: use_pill("b")
 				KEY_4: use_candle()
 				KEY_ESCAPE:
-					if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and G.playing and not G.modal_open:
-						Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-						H.show_pause(true)
+					if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and G.playing and not G.modal_open and not G.paused:
+						pause_game()
 		elif not event.pressed:
 			keys[k] = false
 	elif event is InputEventMouseMotion:
@@ -440,11 +514,26 @@ func _unhandled_input(event: InputEvent) -> void:
 			player_pitch = clampf(player_pitch, -1.35, 1.35)
 	elif event is InputEventMouseButton:
 		if event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-			if G.playing and not G.modal_open:
+			if G.playing and not G.modal_open and not G.paused:
 				_capture_mouse()
 
 func _capture_mouse() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+## 暂停/恢复:主循环以 G.paused 把玩家移动、时间与理智结算一起冻结;
+## 两侧都清空按键,避免暂停前长按的方向键在恢复瞬间继续驱动。
+func pause_game() -> void:
+	G.paused = true
+	keys_reset()
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	H.show_pause(true)
+
+func resume_game() -> void:
+	G.paused = false
+	H.show_pause(false)
+	keys_reset()
+	if G.playing:
+		_capture_mouse()
 
 # ---------- 理智 / 时间 / 道具 ----------
 
@@ -480,9 +569,10 @@ func use_pill(which: String) -> void:
 		change_sanity(25.0)
 		H.show_msg("镇静片(批号2048)……世界安静了下来。理智 +25")
 	else:
-		change_sanity(-10.0)
+		var bad_drain := 10.0   # 假药一次性扣值(文案同源)
+		change_sanity(-bad_drain)
 		shake = 1.6
-		H.show_msg("药片(批号2051)……墙上爬满了影子。这是假药。理智 −10")
+		H.show_msg("药片(批号2051)……墙上爬满了影子。这是假药。理智 −%d" % int(bad_drain))
 		S.sting()
 
 func use_candle() -> void:
@@ -543,18 +633,16 @@ func update_atmosphere(dt: float) -> void:
 			var qm := QuadMesh.new()
 			qm.size = Vector2(0.9, 2.2)
 			m.mesh = qm
-			var mat := StandardMaterial3D.new()
-			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-			mat.albedo_color = Color(0, 0, 0, 0.85)
-			m.material_override = mat
+			m.material_override = _shadow_mat
 			m.position = Vector3(p.x, 1.1, p.z)
 			floor_root.add_child(m)
 			m.look_at(Vector3(camera.global_position.x, 1.1, camera.global_position.z))
 			var life := 0.9 + randf() * 0.6
-			get_tree().create_timer(life).timeout.connect(func() -> void:
-				if is_instance_valid(m):
-					m.free())
+			# 清理回调绑在影子自身的 tween 上:影子被楼层切换释放时 tween 一并失效,
+			# 不会像 SceneTree 计时器那样回调已释放实例并打印 "Lambda capture was freed"。
+			var fade_tw := m.create_tween()
+			fade_tw.tween_interval(life)
+			fade_tw.tween_callback(func() -> void: m.free())
 			S.thud()
 	if not call_done and (G.floor_id == "4F" or G.floor_id == "7F") and G.sanity < 85.0 and not G.modal_open:
 		if randf() < dt * 0.02:
@@ -570,7 +658,7 @@ func update_atmosphere(dt: float) -> void:
 						change_sanity(-G.NUM["violation"])
 						H.red_flash()
 						S.sting()
-						H.show_msg("叫你的不是人。它没有脸。理智 −15")},
+						H.show_msg("叫你的不是人。它没有脸。理智 −%d" % int(G.NUM["violation"]))},
 					{"text": "站住,默数到七,不回头", "fn": func() -> void:
 						close_modal()
 						change_sanity(2.0)
@@ -582,7 +670,7 @@ func update_atmosphere(dt: float) -> void:
 					change_sanity(-G.NUM["violation"])
 					H.red_flash()
 					S.sting()
-					H.show_msg("你僵在原地。那个声音贴得更近了……理智 −15"),
+					H.show_msg("你僵在原地。那个声音贴得更近了……理智 −%d" % int(G.NUM["violation"])),
 			})
 	if G.sanity < 25.0 and fake_exit_obj == null and floor_root:
 		var m := MeshInstance3D.new()
@@ -600,8 +688,9 @@ func update_atmosphere(dt: float) -> void:
 		floor_root.add_child(m)
 		fake_exit_obj = m
 		add_inter(Vector3(-6.5, 1.6, -7.6), "绿色的\"出口\"标志", func() -> void:
-			change_sanity(-5.0)
-			H.show_msg("绿色的光不是出口。这里什么都没有。理智 −5"), 2.2)
+			var fake_drain := 5.0   # 假出口一次性扣值(文案同源)
+			change_sanity(-fake_drain)
+			H.show_msg("绿色的光不是出口。这里什么都没有。理智 −%d" % int(fake_drain)), 2.2)
 		H.show_msg("墙角亮起了一块绿色的\"出口\"标志……")
 
 # ---------- 电梯 ----------
@@ -633,6 +722,10 @@ func open_elevator_ui() -> void:
 func ride_to(f: String, skip_anomaly := false) -> void:
 	if f == G.floor_id:
 		return
+	if G.riding:
+		# 乘梯尚未落地时的重复呼梯直接忽略:否则第二程协程与第一程竞态、楼层双建
+		return
+	G.riding = true
 	G.modal_open = false
 	H.close_modal()
 	keys_reset()
@@ -654,6 +747,7 @@ func _arrive(f: String) -> void:
 	await _wait(0.5)
 	G.floor_id = f
 	build_floor(f)
+	G.riding = false
 	H.fade_out()
 	H.show_msg(floor_name(f), 3.2)
 
@@ -675,7 +769,7 @@ func run_anomaly(cb: Callable) -> void:
 				H.red_flash()
 				shake = 1.8
 				S.sting()
-				H.show_msg(ctext + "(理智 −15)", 5.2)
+				H.show_msg(ctext + "(理智 −%d)" % int(G.NUM["violation"]), 5.2)
 			await _wait(1.4)
 			if cb.is_valid():
 				cb.call()})
@@ -690,7 +784,7 @@ func run_anomaly(cb: Callable) -> void:
 			change_sanity(-G.NUM["violation"])
 			H.red_flash()
 			S.sting()
-			H.show_msg("你僵在原地,什么都没有做。" + a["wrongText"] + "(理智 −15)", 5.2)
+			H.show_msg("你僵在原地,什么都没有做。" + a["wrongText"] + "(理智 −%d)" % int(G.NUM["violation"]), 5.2)
 			await _wait(1.4)
 			if cb.is_valid():
 				cb.call(),
@@ -699,9 +793,39 @@ func run_anomaly(cb: Callable) -> void:
 func _wait(sec: float) -> void:
 	await get_tree().create_timer(sec).timeout
 
+## 统一延迟回调(楼层脚本用):tween 绑定 Main,场景重载(Main 释放)即自动失效;
+## 替代散落各层的 get_tree().create_timer——SceneTreeTimer 不随节点释放,
+## 重试/回标题后回调仍会打到旧实例。楼层搭建期的解谜节奏回调全部走这里。
+func after(sec: float, fn: Callable) -> void:
+	var tw := create_tween()
+	tw.tween_interval(sec)
+	tw.tween_callback(fn)
+
 # ---------- 场景搭建工具 ----------
 
+var _mat_cache := {}   # 材质实例缓存(键 = 选项字典签名)。每层几十份相同外观的材质收敛为一份;
+                       # 会被楼层逻辑后续改动的材质传 "no_cache": true 跳过(pmat 不读该键)
+var trim_mats := {}    # 墙体装饰线材质缓存(跨楼层复用)
+
+static func _mat_sig(o: Dictionary) -> String:
+	var keys := o.keys()
+	keys.sort()
+	var parts := PackedStringArray()
+	for k in keys:
+		parts.append(str(k) + ":" + str(o[k]))
+	return "&".join(parts)
+
 func pmat(o: Dictionary = {}) -> StandardMaterial3D:
+	if o.get("no_cache", false):
+		return _pmat_build(o)
+	var key := _mat_sig(o)
+	if _mat_cache.has(key):
+		return _mat_cache[key]
+	var m := _pmat_build(o)
+	_mat_cache[key] = m
+	return m
+
+func _pmat_build(o: Dictionary) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	if o.has("color"):
 		m.albedo_color = o["color"]
@@ -758,8 +882,6 @@ func add_box(w: float, h: float, d: float, material: Material, x: float, y: floa
 	if collide:
 		colliders.append(Rect2(x - w / 2.0, z - d / 2.0, w, d))
 	return m
-
-var trim_mats := {}  # 墙体装饰线材质缓存(跨楼层复用)
 
 func _trim_mat(kind: String) -> StandardMaterial3D:
 	if not trim_mats.has(kind):
@@ -847,15 +969,19 @@ func setup_env(ambient_energy: float, ambient_color: Color, fog_color: Color, fo
 	we.environment = env
 	floor_root.add_child(we)
 
-func add_light(color: Color, intensity: float, dist: float, x: float, y: float, z: float, flicker := 0.0) -> OmniLight3D:
+## 点光源。shadow 默认 true,仅楼层主灯开(每盏阴影点光在 Forward+ 下占 6 面立方体阴影 pass);
+## 闪烁装饰灯、轿厢小灯、车灯等氛围光传 false——它们是点状补光,关影观感几乎无损。
+func add_light(color: Color, intensity: float, dist: float, x: float, y: float, z: float, flicker := 0.0, shadow := true) -> OmniLight3D:
 	var l := OmniLight3D.new()
 	l.light_color = color
 	l.light_energy = intensity * 2.0
 	l.omni_range = dist
 	l.position = Vector3(x, y, z)
-	l.shadow_enabled = true
+	l.shadow_enabled = shadow
 	floor_root.add_child(l)
 	lights.append({"l": l, "base": l.light_energy, "flicker": flicker})
+	if flicker > 0.0:
+		flicker_lights.append(lights[-1])
 	return l
 
 func add_dyn_lights(f: String) -> void:
@@ -871,7 +997,7 @@ func add_dyn_lights(f: String) -> void:
 	cool.omni_range = 18.0
 	cool.position = Vector3(-4, 2.6, 3)
 	for l: OmniLight3D in [warm, cool]:
-		l.shadow_enabled = true
+		l.shadow_enabled = false   # 巡游补光每帧移动位置,开影等于每帧全场景重渲染;氛围叠加不开影
 		floor_root.add_child(l)
 	dyn_lights = {"warm": warm, "cool": cool}
 
@@ -886,6 +1012,7 @@ func clear_scene() -> void:
 	colliders = []
 	interactables = []
 	lights = []
+	flicker_lights = []
 	dyn_lights = {}
 	safe_spots = []
 	floor_update = Callable()
@@ -897,7 +1024,8 @@ func open_doors_anim() -> void:
 		return
 	var dl: MeshInstance3D = elevator_doors["dl"]
 	var dr: MeshInstance3D = elevator_doors["dr"]
-	var tw := create_tween()
+	# tween 绑在 floor_root 上随楼层一起释放,避免快速连乘时跨层步进已释放的门体
+	var tw := floor_root.create_tween()
 	tw.tween_property(dl, "position:x", -1.65, 0.9)
 	tw.parallel().tween_property(dr, "position:x", 1.65, 0.9)
 	tw.tween_interval(2.6)
@@ -972,6 +1100,7 @@ func start_play(reset: bool) -> void:
 	H.set_hud_visible(true)
 	G.playing = true
 	G.modal_open = false
+	G.riding = false
 	if reset:
 		build_floor("1F")
 	else:
@@ -1015,8 +1144,8 @@ func start_ending(id := "true") -> void:
 		return
 	G.flags["ended"] = true
 	ending_id = id
-	add_game_minutes(15)
 	G.playing = false
+	add_game_minutes(15)   # 先退出 playing 再加时:时限判定不会抢跑成死亡,把结局画面顶掉
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	H.set_hud_visible(false)
 	H.show_ending(ENDINGS[id]["title"], ENDINGS[id]["steps"][0])

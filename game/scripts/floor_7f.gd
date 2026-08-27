@@ -14,14 +14,15 @@ static func build(m) -> void:
 	# 遗照
 	Props.portrait_stand(m, 0, 1.9, -7.8, m.tex_mat("portrait", "1a1a1c", {"roughness": 0.7}))
 	m.add_light(Color.html("ff8860"), 0.75, 5.0, 0, 2.2, -6.5, 0.3)
-	m.add_light(Color.html("ff9950"), 0.55, 5.0, -2.6, 2.2, -6.2, 0.3)
+	m.add_light(Color.html("ff9950"), 0.55, 5.0, -2.6, 2.2, -6.2, 0.3, false)
 	var photo_cb := func() -> void:
 		if not m.G.flags.get("photoSeen", false):
 			m.G.flags["photoSeen"] = true
-			m.change_sanity(-10.0)
+			var photo_drain := 10.0   # 遗照惊吓一次性扣值(文案同源)
+			m.change_sanity(-photo_drain)
 			m.H.red_flash()
 			m.S.sting()
-			m.H.show_msg("黑白照片上的人,穿着你的外套,是你的脸。\n照片下方的小字:\"林砚(1996–?)\"。理智 −10", 5.6)
+			m.H.show_msg("黑白照片上的人,穿着你的外套,是你的脸。\n照片下方的小字:\"林砚(1996–?)\"。理智 −%d" % int(photo_drain), 5.6)
 		else:
 			m.H.show_msg("遗照上的\"你\",嘴角似乎比刚才高了一点。")
 	m.add_inter(Vector3(0, 1.7, -7.5), "遗照", photo_cb, 2.2)
@@ -34,16 +35,28 @@ static func build(m) -> void:
 			"choices": [{"text": "默记于心", "fn": func() -> void: m.close_modal()}],
 		})
 	m.add_inter(Vector3(-3.4, 1.6, -7.5), "讣告", obit_cb, 2.2)
-	# 纸人 ×3(双面半透明,不投影)
+	# 纸人 ×3(剪影人形薄片 + 脸谱贴片,双面半透明,不投影)
 	var pms: Array = []
-	var pm_mat: StandardMaterial3D = m.tex_mat("paperman", "dcd6c4", {"roughness": 0.85, "transparent": true, "double_sided": true})
+	var pm_mat: StandardMaterial3D = m.tex_mat("papergrain", "dcd6c4", {"roughness": 0.85, "transparent": true, "double_sided": true,
+		"no_cache": true})   # 随后改 albedo_color;纸人材质不能与其他纸面共享
+	pm_mat.albedo_color = Color(0.9, 0.88, 0.8, 0.92)
+	var face_mat: StandardMaterial3D = m.tex_mat("paperface", "dcd6c4", {"roughness": 0.85, "no_cache": true})   # 随后开双面
+	face_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var sheet := Humanoid.paper_man_mesh()
 	for p: Array in [[-4.5, -2], [4.5, -2], [-3, 4.5]]:
-		var pm := MeshInstance3D.new()
-		var pb := BoxMesh.new()
-		pb.size = Vector3(0.85, 1.9, 0.02)
-		pm.mesh = pb
-		pm.material_override = pm_mat
-		pm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var pm := Node3D.new()
+		var body := MeshInstance3D.new()
+		body.mesh = sheet
+		body.material_override = pm_mat
+		body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		pm.add_child(body)
+		# 脸谱贴片(正面 -Z,随 look_at 朝向玩家)
+		var face := MeshInstance3D.new()
+		face.mesh = Humanoid.flat_quad(0.3, 0.3)
+		face.material_override = face_mat
+		face.position = Vector3(0, 0.75, -0.012)
+		face.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		pm.add_child(face)
 		pm.position = Vector3(p[0], 1.0, p[1])
 		m.floor_root.add_child(pm)
 		pms.append(pm)
@@ -76,11 +89,11 @@ static func build(m) -> void:
 		tm.emission_energy_multiplier = 2.2
 		m.add_game_minutes(10)
 		m.gain_relic("未点燃的香")
-		m.get_tree().create_timer(2.8).timeout.connect(func() -> void:
+		m.after(2.8, func() -> void:
 			m.G.candles += 2
 			m.H.show_msg("香案暗格里,还压着两支红香烛。+香烛 ×2(按4使用)", 4.6))
-		m.get_tree().create_timer(5.4).timeout.connect(func(): m.gain_card("8F"))
-		m.get_tree().create_timer(8.2).timeout.connect(func() -> void:
+		m.after(5.4, func(): m.gain_card("8F"))
+		m.after(8.2, func() -> void:
 			m.H.show_msg("一个模糊的身影在供桌后作了个揖,散成灰白的光点。\n\"谢谢你,兄弟们等这炷香,等了三十年。\"", 6.2))
 		m.H.set_objective("权限卡8F到手。乘电梯前往 8F 档案室")
 	var incense_cb := func() -> void:

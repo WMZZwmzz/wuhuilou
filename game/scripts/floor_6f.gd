@@ -58,8 +58,8 @@ static func build(m) -> void:
 								"choices": [{"text": "取下墙上的门牌", "fn": func() -> void:
 									m.close_modal()
 									m.gain_relic("1304 门牌")
-									m.get_tree().create_timer(2.6).timeout.connect(func(): m.gain_card("7F"))
-									m.get_tree().create_timer(5.4).timeout.connect(func() -> void:
+									m.after(2.6, func(): m.gain_card("7F"))
+									m.after(5.4, func() -> void:
 										m.H.show_msg("\"替我留着。等这楼塌了,我就认得回家的门了。\"\n身影淡去。录音机里弹出一张卡片。", 5.6))
 									m.H.set_objective("权限卡7F到手。乘电梯前往 7F 灵堂")}],
 							})},
@@ -79,11 +79,12 @@ static func build(m) -> void:
 					"choices": [
 						{"text": "推开门看看", "fn": func() -> void:
 							m.close_modal()
-							m.change_sanity(-10.0)
+							var door_drain := 10.0   # 1304 推门惊吓一次性扣值(文案同源)
+							m.change_sanity(-door_drain)
 							m.H.red_flash()
 							m.S.thud()
 							m.shake = 1.6
-							m.H.show_msg("门推开了三寸,又被什么东西从里面死死顶住。\n门缝里,一只贴着门板的眼睛缓缓闭上。理智 −10", 5.4)},
+							m.H.show_msg("门推开了三寸,又被什么东西从里面死死顶住。\n门缝里,一只贴着门板的眼睛缓缓闭上。理智 −%d" % int(door_drain), 5.4)},
 						{"text": "退开", "fn": func() -> void: m.close_modal()},
 					],
 				})

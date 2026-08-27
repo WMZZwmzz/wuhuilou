@@ -34,7 +34,7 @@ static func build(m) -> void:
 	rc.material_override = m.pmat({"color": Color.html("3c5450"), "roughness": 0.6, "clearcoat": 0.3, "cc_rough": 0.4})
 	rc.position = Vector3(0, 0.026, -0.015)
 	reg_book.add_child(rc)
-	m.add_light(Color.html("c8d8b0"), 0.3, 5.0, 8, 2.7, -6, 0.1)
+	m.add_light(Color.html("c8d8b0"), 0.3, 5.0, 8, 2.7, -6, 0.1, false)
 	# 处方登记册(权限卡)
 	var reg_cb := func() -> void:
 		if not m.G.flags.get("card4F", false):
@@ -91,36 +91,7 @@ static func build(m) -> void:
 	var mann := Node3D.new()
 	var mk_mat := func(hex: String) -> StandardMaterial3D:
 		return m.pmat({"color": Color.html(hex), "roughness": 0.45, "clearcoat": 0.5, "cc_rough": 0.3})
-	var m_body := MeshInstance3D.new()
-	var bcy := CylinderMesh.new()
-	bcy.top_radius = 0.16
-	bcy.bottom_radius = 0.22
-	bcy.height = 1.15
-	m_body.mesh = bcy
-	m_body.material_override = mk_mat.call("b8b0a2")
-	m_body.position = Vector3(0, 0.85, 0)
-	var m_head := MeshInstance3D.new()
-	var hsp := SphereMesh.new()
-	hsp.radius = 0.15
-	hsp.height = 0.3
-	m_head.mesh = hsp
-	m_head.material_override = mk_mat.call("c4bcae")
-	m_head.position = Vector3(0, 1.55, 0)
-	var m_arm := MeshInstance3D.new()
-	var ac := CylinderMesh.new()
-	ac.top_radius = 0.045
-	ac.bottom_radius = 0.045
-	ac.height = 0.7
-	m_arm.mesh = ac
-	m_arm.material_override = mk_mat.call("b8b0a2")
-	m_arm.position = Vector3(0.22, 1.15, 0)
-	m_arm.rotation.z = 0.5
-	var m_arm2 := MeshInstance3D.new()
-	m_arm2.mesh = ac
-	m_arm2.material_override = mk_mat.call("b8b0a2")
-	m_arm2.position = Vector3(-0.22, 1.15, 0)
-	m_arm2.rotation.z = -0.5
-	# 五叉轮底座 + 髋 + 双腿 + 颈 + 肩球(医疗教学模型式)
+	# 五叉轮底座 + 立杆 + 髋座(医疗教学模型式)
 	var stem := MeshInstance3D.new()
 	var stc := CylinderMesh.new()
 	stc.top_radius = 0.028
@@ -162,38 +133,26 @@ static func build(m) -> void:
 	hip.material_override = mk_mat.call("b8b0a2")
 	hip.position = Vector3(0, 0.43, 0)
 	mann.add_child(hip)
-	for sx: float in [-0.09, 0.09]:
-		var leg := MeshInstance3D.new()
-		var gc := CylinderMesh.new()
-		gc.top_radius = 0.05
-		gc.bottom_radius = 0.055
-		gc.height = 0.32
-		leg.mesh = gc
-		leg.material_override = mk_mat.call("b8b0a2")
-		leg.position = Vector3(sx, 0.3, 0)
-		mann.add_child(leg)
-	var neck := MeshInstance3D.new()
-	var nc := CylinderMesh.new()
-	nc.top_radius = 0.035
-	nc.bottom_radius = 0.04
-	nc.height = 0.1
-	neck.mesh = nc
-	neck.material_override = mk_mat.call("c4bcae")
-	neck.position = Vector3(0, 1.47, 0)
-	mann.add_child(neck)
-	for sx: float in [-0.22, 0.22]:
-		var shoulder := MeshInstance3D.new()
-		var spm := SphereMesh.new()
-		spm.radius = 0.07
-		spm.height = 0.14
-		shoulder.mesh = spm
-		shoulder.material_override = mk_mat.call("b8b0a2")
-		shoulder.position = Vector3(sx, 1.38, 0)
-		mann.add_child(shoulder)
-	mann.add_child(m_body)
-	mann.add_child(m_head)
-	mann.add_child(m_arm)
-	mann.add_child(m_arm2)
+	# 上半身:光面塑料分段模型(无腿,髋部挂载在髋座上)
+	var fig := Props.human_figure(m, {
+		"pose": "stand", "legless": true, "scale": 1.28, "plastic": true,
+		"face": "none", "hair": "bald",
+		"top_hex": "b8b0a2", "bottom_hex": "a89a8c", "skin_hex": "c4bcae",
+	})
+	var m_upper: Node3D = fig["root"]
+	m_upper.position = Vector3(0, 0.46, 0)
+	mann.add_child(m_upper)
+	fig["arm_l"].rotation.z = -0.22
+	fig["arm_r"].rotation.z = 0.22
+	# 颈部分段环(教学模型的关节特征)
+	var ring := MeshInstance3D.new()
+	var rm := TorusMesh.new()
+	rm.inner_radius = 0.05
+	rm.outer_radius = 0.06
+	ring.mesh = rm
+	ring.material_override = mk_mat.call("8a827a")
+	ring.position = Vector3(0, 0.46 + 0.6 * 1.28, 0)
+	mann.add_child(ring)
 	mann.position = Vector3(0, 0, -2)
 	m.floor_root.add_child(mann)
 	var scare := {"count": 0}
@@ -227,7 +186,7 @@ static func build(m) -> void:
 			if scare["count"] >= 3:
 				m.G.flags["mannGone"] = true
 				mann.visible = false
-				m.get_tree().create_timer(2.5).timeout.connect(func() -> void:
+				m.after(2.5, func() -> void:
 					m.H.show_msg("再回头,模型不见了。诊室的地板上留着一圈灰白的人形粉印。", 4.6))
 	m.tp_list([
 		{"x": 8.0, "z": -4.6, "yaw": 0.0},

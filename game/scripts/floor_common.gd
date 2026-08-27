@@ -1,8 +1,7 @@
 class_name FloorCommon
 extends RefCounted
 ## 公共楼层搭建:房间外壳 + 电梯间(与原 three.js 版几何/碰撞一致)
-
-const WALL_H := 3.2
+## WALL_H 单一来源为 main.gd 的 m.WALL_H(楼层脚本均经此引用)
 
 static func room_shell(m, w := 20.0, d := 16.0) -> void:
 	# 地板(做旧抛光:清漆 + 砖缝法线) / 天花
@@ -20,7 +19,7 @@ static func room_shell(m, w := 20.0, d := 16.0) -> void:
 		"roughness": 0.95, "normal_scale": 0.3,
 		"color": Color.html("4a473f") if m.T.tex.get("ceil") == null else Color.WHITE,
 	})
-	m.add_floor_plane(w, d, cmat, 0, WALL_H, 0, false)
+	m.add_floor_plane(w, d, cmat, 0, m.WALL_H, 0, false)
 	# 四周外墙(+Z 侧中央留 2.4m 电梯口)
 	m.add_wall(-w / 2.0, 0.0, 0.3, d)
 	m.add_wall(w / 2.0, 0.0, 0.3, d)
@@ -30,7 +29,7 @@ static func room_shell(m, w := 20.0, d := 16.0) -> void:
 	# 东西长墙的分段壁柱(南北墙有门 / 电梯口,不加;位置避开 2F 窗与各层贴墙家具)
 	for sx: float in [-w / 2.0, w / 2.0]:
 		for sz: float in [-4.0, 4.0]:
-			m.add_box(0.3, WALL_H - 0.1, 0.46, m._trim_mat("pilaster"), sx, (WALL_H - 0.1) / 2.0, sz, false)
+			m.add_box(0.3, m.WALL_H - 0.1, 0.46, m._trim_mat("pilaster"), sx, (m.WALL_H - 0.1) / 2.0, sz, false)
 
 ## 电梯间:统一位于 +Z 侧中央
 static func build_elevator(m) -> void:
@@ -56,7 +55,7 @@ static func build_elevator(m) -> void:
 	# 门楣横梁(北脸凸出墙面 1cm,避开共面):从门顶 2.6 一直补到天花 3.2,填满门洞上方
 	m.add_box(3.0, 0.6, 0.2, mt, 0, 2.9, 7.94, false)
 	# 轿厢顶/底板:电梯间外凸于房间天花与地板平面(z>8)之外,需自行封闭,否则门开时看穿
-	m.add_box(3.04, 0.12, 1.9, mt, 0, WALL_H - 0.06, 8.95, false)
+	m.add_box(3.04, 0.12, 1.9, mt, 0, m.WALL_H - 0.06, 8.95, false)
 	m.add_box(3.04, 0.12, 1.9, mt, 0, -0.06, 8.95, false)
 	m.add_box(0.44, 0.18, 0.04, m.pmat({"color": Color.html("101410"), "roughness": 0.6}), 0, 2.86, 7.85, false)
 	var ind := MeshInstance3D.new()
@@ -71,8 +70,8 @@ static func build_elevator(m) -> void:
 	ind.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	m.floor_root.add_child(ind)
 	m.add_box(2.3, 0.03, 0.18, mt, 0, 0.015, 7.82, false)
-	# 电梯内小灯 + 呼梯面板
-	m.add_light(Color.html("aaccdd"), 0.5, 4.0, 0, 2.4, 8.9, 0.1)
+	# 电梯内小灯 + 呼梯面板(轿厢氛围小灯不开影)
+	m.add_light(Color.html("aaccdd"), 0.5, 4.0, 0, 2.4, 8.9, 0.1, false)
 	var panel: StandardMaterial3D = m.pmat({
 		"color": Color.html("222826"), "emission": Color.html("1a3326"),
 		"emission_energy": 1.2, "metallic": 0.3, "roughness": 0.5,

@@ -47,7 +47,7 @@ static func build(m) -> void:
 	})
 	Props.pc_terminal(m, 7.0, -3.6, PI, host_scr)
 	m.colliders.append(Rect2(7.0 - 0.6, -3.6 - 0.35, 1.2, 0.7))
-	m.add_light(Color.html("6a9ac8"), 0.35, 6.0, 7.0, 2.4, -3.4, 0.1)
+	m.add_light(Color.html("6a9ac8"), 0.35, 6.0, 7.0, 2.4, -3.4, 0.1, false)
 	var solve_pc := func() -> void:
 		m.G.flags["del5F"] = true
 		m.add_game_minutes(10)
@@ -57,8 +57,8 @@ static func build(m) -> void:
 			"choices": [{"text": "取走键盘下的会员卡", "fn": func() -> void:
 				m.close_modal()
 				m.gain_relic("网吧会员卡")
-				m.get_tree().create_timer(2.6).timeout.connect(func(): m.gain_card("6F"))
-				m.get_tree().create_timer(5.4).timeout.connect(func() -> void:
+				m.after(2.6, func(): m.gain_card("6F"))
+				m.after(5.4, func() -> void:
 					m.H.show_msg("尸体在蓝光里淡成一片薄影,散了。\n会员卡背面刻着四个字:\"再试一次\"。", 5.2))
 				m.H.set_objective("权限卡6F到手。乘电梯前往 6F 酒店公寓")}],
 		})
@@ -75,10 +75,11 @@ static func build(m) -> void:
 					solve_pc.call()},
 				{"text": "输入 20080613", "fn": func() -> void:
 					m.close_modal()
-					m.change_sanity(-10.0)
+					var wrong_pw_drain := 10.0   # 错误输入惊吓一次性扣值(文案同源)
+					m.change_sanity(-wrong_pw_drain)
 					m.H.red_flash()
 					m.S.sting()
-					m.H.show_msg("\"密码错误。错误 3 次将锁定。\"\n屏幕闪了一下——监控画面里,你背后的走廊多了一个站着的影子。理智 −10", 5.4)},
+					m.H.show_msg("\"密码错误。错误 3 次将锁定。\"\n屏幕闪了一下——监控画面里,你背后的走廊多了一个站着的影子。理智 −%d" % int(wrong_pw_drain), 5.4)},
 				{"text": "暂时取消", "fn": func() -> void: m.close_modal()},
 			],
 		})
@@ -86,32 +87,17 @@ static func build(m) -> void:
 	# 网管室(-X 后角):阿杰的尸体,偶尔转头
 	m.add_wall(-6.5, -6.75, 0.3, 2.5)
 	m.add_wall(-9.1, -5.5, 1.8, 0.3)
-	Props.chair(m, -8.3, -6.2, 0.6)
-	var jay := Node3D.new()
-	var cloth: StandardMaterial3D = m.pmat({"color": Color.html("32404a"), "roughness": 0.9})
-	var skin: StandardMaterial3D = m.pmat({"color": Color.html("9a8874"), "roughness": 0.85})
-	var jb := MeshInstance3D.new()
-	var jbc := CylinderMesh.new()
-	jbc.top_radius = 0.18
-	jbc.bottom_radius = 0.24
-	jbc.height = 0.6
-	jb.mesh = jbc
-	jb.material_override = cloth
-	jb.position = Vector3(0, 0.75, 0)
-	jb.rotation.z = 0.28
-	jay.add_child(jb)
-	var jh := MeshInstance3D.new()
-	var jhs := SphereMesh.new()
-	jhs.radius = 0.13
-	jhs.height = 0.26
-	jh.mesh = jhs
-	jh.material_override = skin
-	jh.position = Vector3(0.06, 1.12, 0.06)
-	jay.add_child(jh)
+	Props.chair(m, -8.3, -6.2, 0.6 + PI)
+	# 阿杰的尸体:瘫坐椅上,垂头歪颈,凹眼张嘴(偶尔"转头")
+	var fig := Props.human_figure(m, {
+		"pose": "slump", "hair": "short", "face": "hollow", "polo": true,
+		"top_hex": "32404a", "bottom_hex": "26303a", "skin_hex": "9a8874", "hair_hex": "26221e",
+	})
+	var jay: Node3D = fig["root"]
 	jay.position = Vector3(-8.3, 0, -6.2)
 	jay.rotation.y = 0.6
 	m.floor_root.add_child(jay)
-	m.add_light(Color.html("4a6a9a"), 0.3, 5.0, -8.3, 2.4, -6.2, 0.15)
+	m.add_light(Color.html("4a6a9a"), 0.3, 5.0, -8.3, 2.4, -6.2, 0.15, false)
 	# 厕所(+X 前角):藏身点 + 电池
 	m.add_wall(6.5, 4.4, 0.3, 3.4)
 	m.add_wall(8.6, 6.0, 4.0, 0.3)
@@ -173,10 +159,11 @@ static func build(m) -> void:
 				jay.look_at(Vector3(m.player_pos.x, jay.position.y, m.player_pos.z))
 				if not m.G.flags.get("jaySeen", false) and m.player_pos.distance_to(jay.position) < 9.0:
 					m.G.flags["jaySeen"] = true
-					m.change_sanity(-10.0)
+					var corpse_drain := 10.0   # 见尸惊吓一次性扣值(文案同源)
+					m.change_sanity(-corpse_drain)
 					m.H.red_flash()
 					m.S.sting()
-					m.H.show_msg("尸体的头,正对着你。眼睛的位置,是两个干瘪的孔。理智 −10", 5.0)
+					m.H.show_msg("尸体的头,正对着你。眼睛的位置,是两个干瘪的孔。理智 −%d" % int(corpse_drain), 5.0)
 	m.tp_list([
 		{"x": 7.0, "z": -1.8, "yaw": 0.0},
 		{"x": -5.5, "z": 3.0, "yaw": 0.0},

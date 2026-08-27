@@ -60,10 +60,12 @@ static func height_to_normal(himg: Image, strength: float = 2.0) -> ImageTexture
 	var w := himg.get_width()
 	var h := himg.get_height()
 	var out := Image.create(w, h, false, Image.FORMAT_RGB8)
+	# 高度抽取走 PackedByteArray(R 通道),避免 w*h 次跨语言 get_pixel 调用(B5)
+	var raw := himg.get_data()
 	var hv := PackedFloat32Array()
 	hv.resize(w * h)
 	for i in w * h:
-		hv[i] = himg.get_pixel(i % w, int(i / w)).r
+		hv[i] = float(raw[i * 3]) / 255.0
 	for y in h:
 		for x in w:
 			var hl := hv[y * w + ((x - 1 + w) % w)]
@@ -80,6 +82,65 @@ func _make_normal(size: int, height_draw: Callable, strength: float) -> ImageTex
 	var hi := Image.create(size, size, false, Image.FORMAT_RGB8)
 	height_draw.call(hi)
 	return height_to_normal(hi, strength)
+
+# ---------- UI 做旧纹理(纯 CPU,headless 下同样可用) ----------
+
+## 整数格点 hash → [0,1)
+static func _n2(xi: int, yi: int) -> float:
+	var h := (xi * 374761393 + yi * 668265263) & 0x7fffffff
+	h = ((h ^ (h >> 13)) * 1274126177) & 0x7fffffff
+	return float(h) / 2147483647.0
+
+## 周期化平滑值噪声(px/py 为格点周期,保证纹理可无缝平铺)
+static func _vnoise(x: float, y: float, px: int, py: int) -> float:
+	var xi := int(floor(x))
+	var yi := int(floor(y))
+	var fx := x - xi
+	var fy := y - yi
+	fx = fx * fx * (3.0 - 2.0 * fx)
+	fy = fy * fy * (3.0 - 2.0 * fy)
+	var x0 := posmod(xi, px)
+	var x1 := posmod(xi + 1, px)
+	var y0 := posmod(yi, py)
+	var y1 := posmod(yi + 1, py)
+	var a := _n2(x0, y0)
+	var b := _n2(x1, y0)
+	var c := _n2(x0, y1)
+	var d := _n2(x1, y1)
+	return lerpf(lerpf(a, b, fx), lerpf(c, d, fx), fy)
+
+## 做旧纸纹:泛黄纸底 + 多频颗粒 + 污渍斑 + 边缘磨损暗角(四周无缝平铺)
+## HUD 侧用 StyleBoxTexture.modulate_color 压暗染色成暗纸底色。
+## headless 返回 null(调用方已有纹理缺失分支,QA 无 UI 不需要这张图)。
+static func paper_texture(size := 256) -> ImageTexture:
+	if DisplayServer.get_name() == "headless":
+		return null
+	var img := Image.create(size, size, false, Image.FORMAT_RGB8)
+	for y in size:
+		for x in size:
+			var fx := float(x) / float(size)
+			var fy := float(y) / float(size)
+			var g := _vnoise(fx * 5.0, fy * 5.0, 5, 5) * 0.5 \
+				+ _vnoise(fx * 17.0 + 3.0, fy * 17.0, 17, 17) * 0.3 \
+				+ _vnoise(fx * 41.0, fy * 41.0 + 5.0, 41, 41) * 0.2
+			var stain := smoothstep(0.60, 0.78, _vnoise(fx * 3.0 + 11.0, fy * 3.0 + 4.0, 3, 3)) * 0.16
+			var ex := minf(fx, 1.0 - fx)
+			var ey := minf(fy, 1.0 - fy)
+			var edge := 1.0 - smoothstep(0.0, 0.085, minf(ex, ey)) * 0.38
+			var v := clampf((0.80 + (g - 0.5) * 0.24 - stain) * edge, 0.0, 1.0)
+			img.set_pixel(x, y, Color(v * 0.97, v * 0.91, v * 0.72))
+	return to_texture(img)
+
+## 老胶片颗粒:单层灰度随机,供全屏低透明度颗粒层(headless 返回 null,颗粒层跳过)
+static func grain_texture(size := 128) -> ImageTexture:
+	if DisplayServer.get_name() == "headless":
+		return null
+	var img := Image.create(size, size, false, Image.FORMAT_RGB8)
+	for y in size:
+		for x in size:
+			var v := clampf(0.5 + (randf() - 0.5) * 1.6, 0.0, 1.0)
+			img.set_pixel(x, y, Color(v, v, v))
+	return to_texture(img)
 
 # ---------- GPU 程序化贴图(墙面/地面等大面积表面) ----------
 # 值噪声 + fbm 在着色器里逐像素生成,1024² 细度远超 CPU 画布且零启动开销;
@@ -247,14 +308,7 @@ func proc_texture(size: int, code: String, renorm := false) -> ImageTexture:
 	sm.shader = sh
 	rect.material = sm
 	vp.add_child(rect)
-	Engine.get_main_loop().root.add_child(vp)
-	await RenderingServer.frame_post_draw
-	await RenderingServer.frame_post_draw
-	var img: Image = vp.get_texture().get_image()
-	vp.queue_free()
-	if img == null or img.is_empty():
-		return null
-	return to_texture(img, renorm)
+	return await _render_vp(vp, renorm)
 
 # ---------- 文本/图形贴图(需要渲染;headless 返回 null,调用方退纯色) ----------
 
@@ -271,6 +325,11 @@ func text_texture(w: int, h: int, paint: Callable) -> ImageTexture:
 	painter.size = Vector2(w, h)
 	painter.draw.connect(func(): paint.call(painter))
 	vp.add_child(painter)
+	return await _render_vp(vp)
+
+## 批处理取图核心:挂树 → 统一等待两个 frame_post_draw(兜底)→ 取图释放。
+## prepare() 先挂全部 SubViewport 再统一 await,串行白等 ≈38 帧收敛为 2 帧。
+func _render_vp(vp: SubViewport, renorm := false) -> ImageTexture:
 	Engine.get_main_loop().root.add_child(vp)
 	await RenderingServer.frame_post_draw
 	await RenderingServer.frame_post_draw
@@ -278,7 +337,7 @@ func text_texture(w: int, h: int, paint: Callable) -> ImageTexture:
 	vp.queue_free()
 	if img == null or img.is_empty():
 		return null
-	return to_texture(img)
+	return to_texture(img, renorm)
 
 func draw_text_line(c: Control, s: String, x: float, y: float, size: int, col: Color, bold := false, center := false) -> void:
 	var f: Font = font if font != null else ThemeDB.fallback_font
@@ -289,15 +348,213 @@ func draw_text_line(c: Control, s: String, x: float, y: float, size: int, col: C
 	c.draw_string(f, Vector2(x, y), s, HORIZONTAL_ALIGNMENT_LEFT, -1, size, col)
 
 # ---------- 全部贴图一次性生成 ----------
+# 两阶段批处理(A1/B1):所有需 GPU/绘制的 SubViewport 先一次挂树,
+# 统一 await 两个 frame_post_draw 后逐个取图——替代原来每张贴图串行各等两帧。
+# 无头模式整段跳过(B6):headless 下贴图不被采样,材质走 has()==false 的纯色回退,
+# 与 GPU 类贴图的既有语义一致。
 
 func prepare() -> void:
-	# 大面积表面:GPU 着色器 1024² 细纹(headless 为 null,材质退纯色)
-	tex.wall = await proc_texture(1024, WALL_SHADER)
-	tex.wall_n = await proc_texture(1024, WALL_NORMAL_SHADER, true)
-	tex.floor = await proc_texture(1024, FLOOR_SHADER)
-	tex.floor_n = await proc_texture(1024, FLOOR_NORMAL_SHADER, true)
-	tex.ceil = await proc_texture(512, CEIL_SHADER)
+	if _headless:
+		return
+	var vps: Dictionary = {}   # tex 名 -> SubViewport(已挂树待渲染)
 
+	vps["wall"] = _vp_shader(1024, WALL_SHADER)
+	vps["wall_n"] = _vp_shader(1024, WALL_NORMAL_SHADER)
+	vps["floor"] = _vp_shader(1024, FLOOR_SHADER)
+	vps["floor_n"] = _vp_shader(1024, FLOOR_NORMAL_SHADER)
+	vps["ceil"] = _vp_shader(512, CEIL_SHADER)
+
+	vps["mj"] = _vp_paint(256, 256, func(c: Control) -> void:
+		c.draw_rect(Rect2(0, 0, 256, 256), Color.html("2d4a33"))
+		for i in 400:
+			c.draw_rect(Rect2(randf() * 256, randf() * 256, 4, 4), Color(0, 0, 0, 0.12))
+		for i in 3:
+			c.draw_rect(Rect2(128 - 72 + i * 50, 104, 40, 52), Color.html("efe8d0"))
+		var chars := ["救", "救", "我"]
+		for i in 3:
+			draw_text_line(c, chars[i], 128 - 72 + i * 50 + 4, 140, 34, Color.html("222222"), true))
+
+	vps["paper"] = _vp_paint(256, 256, func(c: Control) -> void:
+		c.draw_rect(Rect2(0, 0, 256, 256), Color.html("d8cfb4"))
+		for i in 200:
+			c.draw_rect(Rect2(randf() * 256, randf() * 256, 4, 4), Color(0.1, 0.1, 0.08, 0.06))
+		draw_text_line(c, "住 户 须 知", 0, 42, 15, Color.html("3a3428"), false, true)
+		var lines := [
+			"一、电梯限乘四人。若电梯内已有", "\"人\",请等下一班。", "二、若按钮13层亮起但无人按", "下,请立即退出。", "三、电梯内镜子不可直视超", "过三秒。", "四、若停靠后门迟迟不开,请", "闭眼、背对门站立。"]
+		for i in lines.size():
+			draw_text_line(c, lines[i], 30, 74 + i * 22, 13, Color.html("3a3428")))
+
+	vps["obit"] = _vp_paint(256, 256, func(c: Control) -> void:
+		c.draw_rect(Rect2(0, 0, 256, 256), Color.html("cfd4cf"))
+		draw_text_line(c, "讣 告", 0, 36, 18, Color.html("2c302c"), true, true)
+		var lines := ["赵氏三兄弟,皆殁于丁丑年", "大火。祭香之礼,先尊后幼:", "长子 赵大河(58)", "次子 赵二河(53)", "幼子 赵小河(41)", "——切不可乱了长幼。"]
+		for i in lines.size():
+			draw_text_line(c, lines[i], 28, 70 + i * 24, 13, Color.html("2c302c")))
+
+	vps["monitor"] = _vp_paint(256, 200, func(c: Control) -> void:
+		c.draw_rect(Rect2(0, 0, 256, 200), Color.html("0c1410"))
+		c.draw_rect(Rect2(256 * 0.3, 20, 256 * 0.4, 160), Color.html("3f5a48"), false, 4.0)
+		c.draw_rect(Rect2(127, 20, 2.5, 160), Color.html("3f5a48"))
+		c.draw_circle(Vector2(128, 76), 13, Color.html("050a07"))
+		c.draw_rect(Rect2(117, 88, 22, 42), Color.html("050a07"))
+		draw_text_line(c, "CAM-01 00:03:12", 10, 186, 12, Color.html("7fae8c"))
+		for i in 300:
+			c.draw_rect(Rect2(randf() * 256, randf() * 200, 2, 2), Color(0.47, 0.7, 0.55, randf() * 0.08)))
+
+	vps["portrait"] = _vp_paint(128, 160, func(c: Control) -> void:
+		c.draw_rect(Rect2(0, 0, 128, 160), Color.html("1a1a1c"))
+		c.draw_circle(Vector2(64, 64), 34, Color.html("3c3c40"))
+		c.draw_rect(Rect2(22, 88, 84, 70), Color.html("3c3c40"))
+		c.draw_rect(Rect2(4, 4, 120, 152), Color.html("8a8474"), false, 8.0)
+		draw_text_line(c, "林 砚", 0, 146, 14, Color.html("9a9484"), false, true))
+
+	vps["plaque"] = _vp_paint(128, 80, func(c: Control) -> void:
+		c.draw_rect(Rect2(0, 0, 128, 80), Color.html("2e2b26"))
+		c.draw_rect(Rect2(5, 5, 118, 70), Color.html("6a6250"), false, 4.0)
+		draw_text_line(c, "1304", 0, 50, 42, Color.html("c8b46a"), true, true))
+
+	vps["diary"] = _vp_paint(128, 160, func(c: Control) -> void:
+		c.draw_rect(Rect2(0, 0, 128, 160), Color.html("7a3040"))
+		c.draw_rect(Rect2(0, 0, 26, 160), Color.html("4a1c28"))
+		draw_text_line(c, "音", 0, 76, 36, Color.html("d8c8a8"), true, true)
+		draw_text_line(c, "日 记", 0, 116, 16, Color.html("d8c8a8"), false, true))
+
+	vps["paperman"] = _vp_paint(128, 256, func(c: Control) -> void:
+		c.draw_rect(Rect2(0, 0, 128, 256), Color.html("dcd6c4"))
+		c.draw_circle(Vector2(128 * 0.38, 256 * 0.4), 10, Color.html("1a1a1a"))
+		c.draw_circle(Vector2(128 * 0.62, 256 * 0.4), 10, Color.html("1a1a1a"))
+		c.draw_arc(Vector2(64, 256 * 0.62), 26, 0.15 * TAU, 0.85 * TAU, 24, Color.html("1a1a1a"), 5)
+		c.draw_rect(Rect2(128 * 0.2, 256 * 0.75, 128 * 0.6, 8), Color(150.0/255, 60.0/255, 50.0/255, 0.4)))
+
+	# 3F 黑板:墨绿板面 + 三行褪色粉笔字
+	vps["chalk"] = _vp_paint(256, 160, func(c: Control) -> void:
+		c.draw_rect(Rect2(0, 0, 256, 160), Color.html("28402e"))
+		for i in 240:
+			c.draw_rect(Rect2(randf() * 256, randf() * 160, 3, 3), Color(1, 1, 1, 0.025))
+		draw_text_line(c, "小朋友们要乖乖睡觉", 16, 44, 17, Color.html("e8e2ce"))
+		draw_text_line(c, "老师一直看着你们呢", 24, 80, 17, Color.html("d8b0a0"))
+		draw_text_line(c, "铃响之前 谁也不许走", 20, 118, 17, Color.html("cfd8e0")))
+
+	# 3F 儿童画(蜡笔):太阳 + 小人 + 房子
+	vps["crayon"] = _vp_paint(128, 128, func(c: Control) -> void:
+		c.draw_rect(Rect2(0, 0, 128, 128), Color.html("e8ddc4"))
+		c.draw_rect(Rect2(6, 6, 116, 116), Color.html("d8ccae"), false, 3.0)
+		c.draw_circle(Vector2(36, 40), 14, Color.html("e8b84a"))
+		for i in 8:
+			c.draw_line(Vector2(36, 40) + Vector2(17, 0).rotated(i * TAU / 8.0), Vector2(36, 40) + Vector2(25, 0).rotated(i * TAU / 8.0), Color.html("e8b84a"), 3.0)
+		c.draw_rect(Rect2(78, 56, 34, 40), Color.html("b06a4a"))
+		c.draw_polygon(PackedVector2Array([Vector2(74, 58), Vector2(116, 58), Vector2(95, 38)]), PackedColorArray([Color.html("8a4a3a")]))
+		c.draw_circle(Vector2(60, 88), 11, Color.html("e0c4a0"))
+		c.draw_rect(Rect2(52, 98, 16, 22), Color.html("6a8ac0"))
+		c.draw_circle(Vector2(56, 86), 2.2, Color.html("1a1a1a"))
+		c.draw_circle(Vector2(64, 86), 2.2, Color.html("1a1a1a"))
+		c.draw_arc(Vector2(60, 91), 4.5, 0.2 * TAU, 0.8 * TAU, 10, Color.html("1a1a1a"), 2))
+
+	# 11F 壁画:暗底上的整栋楼,窗格零星亮灯、一扇红窗
+	vps["mural"] = _vp_paint(256, 256, func(c: Control) -> void:
+		c.draw_rect(Rect2(0, 0, 256, 256), Color.html("241a1e"))
+		c.draw_circle(Vector2(128, 128), 92, Color(120.0/255, 30.0/255, 40.0/255, 0.35))
+		c.draw_rect(Rect2(78, 52, 100, 176), Color.html("3a2e30"))
+		c.draw_rect(Rect2(72, 224, 112, 8), Color.html("2c2224"))
+		for fy in 12:
+			for fx in 4:
+				var wx := 88 + fx * 22
+				var wy := 62 + fy * 14
+				var lit := (fx * 7 + fy * 13) % 10 < 3
+				var col: Color = Color.html("7a5a28") if lit else Color.html("181214")
+				if fx == 2 and fy == 8:
+					col = Color.html("a8282a")
+				c.draw_rect(Rect2(wx, wy, 12, 8), col)
+		draw_text_line(c, "每年今夜 · 无回", 0, 246, 13, Color.html("6a5448"), false, true))
+
+	# 10F 请柬:红底金字囍卡
+	vps["invite"] = _vp_paint(128, 176, func(c: Control) -> void:
+		c.draw_rect(Rect2(0, 0, 128, 176), Color.html("8e2f32"))
+		c.draw_rect(Rect2(8, 8, 112, 160), Color.html("c9a55a"), false, 3.0)
+		c.draw_rect(Rect2(14, 14, 100, 148), Color.html("8e2f32"), false, 2.0)
+		draw_text_line(c, "囍", 0, 78, 46, Color.html("e8c878"), true, true)
+		draw_text_line(c, "许文远 · 苏晚晴", 0, 118, 14, Color.html("e8c878"), false, true)
+		draw_text_line(c, "恭候光临", 0, 148, 12, Color.html("c9a55a"), false, true))
+
+	# 12F 全家福:泛黄老照片,烧焦的边
+	vps["photo"] = _vp_paint(128, 96, func(c: Control) -> void:
+		c.draw_rect(Rect2(0, 0, 128, 96), Color.html("c8b48e"))
+		c.draw_rect(Rect2(0, 0, 128, 96), Color(80.0/255, 60.0/255, 30.0/255, 0.18))
+		c.draw_rect(Rect2(30, 26, 24, 52), Color.html("6a7a92"))
+		c.draw_circle(Vector2(42, 22), 9, Color.html("d8c0a0"))
+		c.draw_rect(Rect2(66, 34, 20, 44), Color.html("7a6250"))
+		c.draw_circle(Vector2(76, 28), 7.5, Color.html("d8c0a0"))
+		for i in 3:
+			c.draw_rect(Rect2(0, i * 32, 128, 2), Color(60.0/255, 40.0/255, 20.0/255, 0.08))
+		for i in 5:
+			c.draw_polygon(PackedVector2Array([Vector2(i * 30, 0), Vector2(i * 30 + 14, 0), Vector2(i * 30 + 6, 10)]), PackedColorArray([Color(30.0/255, 18.0/255, 10.0/255, 0.55)])))
+
+	# 纸人脸谱:纸底 + 墨线五官(7F 纸人正面)
+	vps["paperface"] = _vp_paint(128, 128, func(c: Control) -> void:
+		c.draw_rect(Rect2(0, 0, 128, 128), Color.html("dcd6c4"))
+		for i in 120:
+			c.draw_rect(Rect2(randf() * 128, randf() * 128, 3, 3), Color(0.1, 0.1, 0.08, 0.05))
+		var ink := Color.html("1c1a18")
+		c.draw_arc(Vector2(44, 52), 9, PI * 1.15, PI * 1.95, 12, ink, 4)
+		c.draw_arc(Vector2(84, 52), 9, PI * 1.05, PI * 1.85, 12, ink, 4)
+		c.draw_line(Vector2(34, 40), Vector2(54, 36), ink, 3)
+		c.draw_line(Vector2(74, 36), Vector2(94, 40), ink, 3)
+		c.draw_circle(Vector2(44, 54), 2.5, ink)
+		c.draw_circle(Vector2(84, 54), 2.5, ink)
+		c.draw_line(Vector2(64, 56), Vector2(62, 70), ink, 2)
+		c.draw_arc(Vector2(64, 78), 12, PI * 0.15, PI * 0.85, 12, Color.html("a03028"), 4)
+		c.draw_circle(Vector2(36, 70), 6, Color(0.7, 0.3, 0.2, 0.15))
+		c.draw_circle(Vector2(92, 70), 6, Color(0.7, 0.3, 0.2, 0.15)))
+
+	# 阶段一收尾:全部 viewport 已挂树,统一等待两帧后批量取图
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	for k: String in vps:
+		tex[k] = _collect_vp(vps[k], k == "wall_n" or k == "floor_n")
+
+	_prepare_cpu_tex()
+
+## 建噪声 shader 的 SubViewport 并挂树
+func _vp_shader(size: int, code: String) -> SubViewport:
+	var sh := Shader.new()
+	sh.code = code.replace("%NOISE%", NOISE_LIB)
+	return _vp_new(size, size, func(rect: ColorRect) -> void:
+		var sm := ShaderMaterial.new()
+		sm.shader = sh
+		rect.material = sm)
+
+## 建绘制控件的 SubViewport 并登记 paint 回调(draw 在随后的渲染帧触发)
+func _vp_paint(w: int, h: int, paint: Callable) -> SubViewport:
+	var vp := _vp_new(w, h, Callable())
+	var painter := vp.get_child(0) as Control
+	painter.draw.connect(func(): paint.call(painter))
+	return vp
+
+func _vp_new(w: int, h: int, setup: Callable) -> SubViewport:
+	var vp := SubViewport.new()
+	vp.size = Vector2i(w, h)
+	vp.disable_3d = true
+	vp.transparent_bg = false
+	vp.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
+	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	var rect := ColorRect.new()
+	rect.size = Vector2(w, h)
+	vp.add_child(rect)
+	if setup.is_valid():
+		setup.call(rect)
+	Engine.get_main_loop().root.add_child(vp)
+	return vp
+
+## 取图并释放 viewport(to_texture 内含 mipmap 生成)
+func _collect_vp(vp: SubViewport, renorm: bool) -> ImageTexture:
+	var img: Image = vp.get_texture().get_image()
+	vp.queue_free()
+	if img == null or img.is_empty():
+		return null
+	return to_texture(img, renorm)
+
+## 纯 CPU 贴图(小面材质/法线/人物基底):headless 下被 prepare() 整段跳过
+func _prepare_cpu_tex() -> void:
 	# 小面材质:CPU 画布
 	var img := Image.create(256, 256, false, Image.FORMAT_RGB8)
 	img.fill(Color.html("5d4530"))
@@ -324,131 +581,6 @@ func prepare() -> void:
 			var v := (90.0 + randf() * 80.0) / 255.0
 			blend_rect(hi, 0, y, 256, 1, Color(v, v, v, 0.4)), 0.8)
 
-	tex.mj = await text_texture(256, 256, func(c: Control) -> void:
-		c.draw_rect(Rect2(0, 0, 256, 256), Color.html("2d4a33"))
-		for i in 400:
-			c.draw_rect(Rect2(randf() * 256, randf() * 256, 4, 4), Color(0, 0, 0, 0.12))
-		for i in 3:
-			c.draw_rect(Rect2(128 - 72 + i * 50, 104, 40, 52), Color.html("efe8d0"))
-		var chars := ["救", "救", "我"]
-		for i in 3:
-			draw_text_line(c, chars[i], 128 - 72 + i * 50 + 4, 140, 34, Color.html("222222"), true))
-
-	tex.paper = await text_texture(256, 256, func(c: Control) -> void:
-		c.draw_rect(Rect2(0, 0, 256, 256), Color.html("d8cfb4"))
-		for i in 200:
-			c.draw_rect(Rect2(randf() * 256, randf() * 256, 4, 4), Color(0.1, 0.1, 0.08, 0.06))
-		draw_text_line(c, "住 户 须 知", 0, 42, 15, Color.html("3a3428"), false, true)
-		var lines := [
-			"一、电梯限乘四人。若电梯内已有", "\"人\",请等下一班。", "二、若按钮13层亮起但无人按", "下,请立即退出。", "三、电梯内镜子不可直视超", "过三秒。", "四、若停靠后门迟迟不开,请", "闭眼、背对门站立。"]
-		for i in lines.size():
-			draw_text_line(c, lines[i], 30, 74 + i * 22, 13, Color.html("3a3428")))
-
-	tex.obit = await text_texture(256, 256, func(c: Control) -> void:
-		c.draw_rect(Rect2(0, 0, 256, 256), Color.html("cfd4cf"))
-		draw_text_line(c, "讣 告", 0, 36, 18, Color.html("2c302c"), true, true)
-		var lines := ["赵氏三兄弟,皆殁于丁丑年", "大火。祭香之礼,先尊后幼:", "长子 赵大河(58)", "次子 赵二河(53)", "幼子 赵小河(41)", "——切不可乱了长幼。"]
-		for i in lines.size():
-			draw_text_line(c, lines[i], 28, 70 + i * 24, 13, Color.html("2c302c")))
-
-	tex.monitor = await text_texture(256, 200, func(c: Control) -> void:
-		c.draw_rect(Rect2(0, 0, 256, 200), Color.html("0c1410"))
-		c.draw_rect(Rect2(256 * 0.3, 20, 256 * 0.4, 160), Color.html("3f5a48"), false, 4.0)
-		c.draw_rect(Rect2(127, 20, 2.5, 160), Color.html("3f5a48"))
-		c.draw_circle(Vector2(128, 76), 13, Color.html("050a07"))
-		c.draw_rect(Rect2(117, 88, 22, 42), Color.html("050a07"))
-		draw_text_line(c, "CAM-01 00:03:12", 10, 186, 12, Color.html("7fae8c"))
-		for i in 300:
-			c.draw_rect(Rect2(randf() * 256, randf() * 200, 2, 2), Color(0.47, 0.7, 0.55, randf() * 0.08)))
-
-	tex.portrait = await text_texture(128, 160, func(c: Control) -> void:
-		c.draw_rect(Rect2(0, 0, 128, 160), Color.html("1a1a1c"))
-		c.draw_circle(Vector2(64, 64), 34, Color.html("3c3c40"))
-		c.draw_rect(Rect2(22, 88, 84, 70), Color.html("3c3c40"))
-		c.draw_rect(Rect2(4, 4, 120, 152), Color.html("8a8474"), false, 8.0)
-		draw_text_line(c, "林 砚", 0, 146, 14, Color.html("9a9484"), false, true))
-
-	tex.plaque = await text_texture(128, 80, func(c: Control) -> void:
-		c.draw_rect(Rect2(0, 0, 128, 80), Color.html("2e2b26"))
-		c.draw_rect(Rect2(5, 5, 118, 70), Color.html("6a6250"), false, 4.0)
-		draw_text_line(c, "1304", 0, 50, 42, Color.html("c8b46a"), true, true))
-
-	tex.diary = await text_texture(128, 160, func(c: Control) -> void:
-		c.draw_rect(Rect2(0, 0, 128, 160), Color.html("7a3040"))
-		c.draw_rect(Rect2(0, 0, 26, 160), Color.html("4a1c28"))
-		draw_text_line(c, "音", 0, 76, 36, Color.html("d8c8a8"), true, true)
-		draw_text_line(c, "日 记", 0, 116, 16, Color.html("d8c8a8"), false, true))
-
-	tex.paperman = await text_texture(128, 256, func(c: Control) -> void:
-		c.draw_rect(Rect2(0, 0, 128, 256), Color.html("dcd6c4"))
-		c.draw_circle(Vector2(128 * 0.38, 256 * 0.4), 10, Color.html("1a1a1a"))
-		c.draw_circle(Vector2(128 * 0.62, 256 * 0.4), 10, Color.html("1a1a1a"))
-		c.draw_arc(Vector2(64, 256 * 0.62), 26, 0.15 * TAU, 0.85 * TAU, 24, Color.html("1a1a1a"), 5)
-		c.draw_rect(Rect2(128 * 0.2, 256 * 0.75, 128 * 0.6, 8), Color(150.0/255, 60.0/255, 50.0/255, 0.4)))
-
-	# 3F 黑板:墨绿板面 + 三行褪色粉笔字
-	tex.chalk = await text_texture(256, 160, func(c: Control) -> void:
-		c.draw_rect(Rect2(0, 0, 256, 160), Color.html("28402e"))
-		for i in 240:
-			c.draw_rect(Rect2(randf() * 256, randf() * 160, 3, 3), Color(1, 1, 1, 0.025))
-		draw_text_line(c, "小朋友们要乖乖睡觉", 16, 44, 17, Color.html("e8e2ce"))
-		draw_text_line(c, "老师一直看着你们呢", 24, 80, 17, Color.html("d8b0a0"))
-		draw_text_line(c, "铃响之前 谁也不许走", 20, 118, 17, Color.html("cfd8e0")))
-
-	# 3F 儿童画(蜡笔):太阳 + 小人 + 房子
-	tex.crayon = await text_texture(128, 128, func(c: Control) -> void:
-		c.draw_rect(Rect2(0, 0, 128, 128), Color.html("e8ddc4"))
-		c.draw_rect(Rect2(6, 6, 116, 116), Color.html("d8ccae"), false, 3.0)
-		c.draw_circle(Vector2(36, 40), 14, Color.html("e8b84a"))
-		for i in 8:
-			c.draw_line(Vector2(36, 40) + Vector2(17, 0).rotated(i * TAU / 8.0), Vector2(36, 40) + Vector2(25, 0).rotated(i * TAU / 8.0), Color.html("e8b84a"), 3.0)
-		c.draw_rect(Rect2(78, 56, 34, 40), Color.html("b06a4a"))
-		c.draw_polygon(PackedVector2Array([Vector2(74, 58), Vector2(116, 58), Vector2(95, 38)]), PackedColorArray([Color.html("8a4a3a")]))
-		c.draw_circle(Vector2(60, 88), 11, Color.html("e0c4a0"))
-		c.draw_rect(Rect2(52, 98, 16, 22), Color.html("6a8ac0"))
-		c.draw_circle(Vector2(56, 86), 2.2, Color.html("1a1a1a"))
-		c.draw_circle(Vector2(64, 86), 2.2, Color.html("1a1a1a"))
-		c.draw_arc(Vector2(60, 91), 4.5, 0.2 * TAU, 0.8 * TAU, 10, Color.html("1a1a1a"), 2))
-
-	# 11F 壁画:暗底上的整栋楼,窗格零星亮灯、一扇红窗
-	tex.mural = await text_texture(256, 256, func(c: Control) -> void:
-		c.draw_rect(Rect2(0, 0, 256, 256), Color.html("241a1e"))
-		c.draw_circle(Vector2(128, 128), 92, Color(120.0/255, 30.0/255, 40.0/255, 0.35))
-		c.draw_rect(Rect2(78, 52, 100, 176), Color.html("3a2e30"))
-		c.draw_rect(Rect2(72, 224, 112, 8), Color.html("2c2224"))
-		for fy in 12:
-			for fx in 4:
-				var wx := 88 + fx * 22
-				var wy := 62 + fy * 14
-				var lit := (fx * 7 + fy * 13) % 10 < 3
-				var col: Color = Color.html("7a5a28") if lit else Color.html("181214")
-				if fx == 2 and fy == 8:
-					col = Color.html("a8282a")
-				c.draw_rect(Rect2(wx, wy, 12, 8), col)
-		draw_text_line(c, "每年今夜 · 无回", 0, 246, 13, Color.html("6a5448"), false, true))
-
-	# 10F 请柬:红底金字囍卡
-	tex.invite = await text_texture(128, 176, func(c: Control) -> void:
-		c.draw_rect(Rect2(0, 0, 128, 176), Color.html("8e2f32"))
-		c.draw_rect(Rect2(8, 8, 112, 160), Color.html("c9a55a"), false, 3.0)
-		c.draw_rect(Rect2(14, 14, 100, 148), Color.html("8e2f32"), false, 2.0)
-		draw_text_line(c, "囍", 0, 78, 46, Color.html("e8c878"), true, true)
-		draw_text_line(c, "许文远 · 苏晚晴", 0, 118, 14, Color.html("e8c878"), false, true)
-		draw_text_line(c, "恭候光临", 0, 148, 12, Color.html("c9a55a"), false, true))
-
-	# 12F 全家福:泛黄老照片,烧焦的边
-	tex.photo = await text_texture(128, 96, func(c: Control) -> void:
-		c.draw_rect(Rect2(0, 0, 128, 96), Color.html("c8b48e"))
-		c.draw_rect(Rect2(0, 0, 128, 96), Color(80.0/255, 60.0/255, 30.0/255, 0.18))
-		c.draw_rect(Rect2(30, 26, 24, 52), Color.html("6a7a92"))
-		c.draw_circle(Vector2(42, 22), 9, Color.html("d8c0a0"))
-		c.draw_rect(Rect2(66, 34, 20, 44), Color.html("7a6250"))
-		c.draw_circle(Vector2(76, 28), 7.5, Color.html("d8c0a0"))
-		for i in 3:
-			c.draw_rect(Rect2(0, i * 32, 128, 2), Color(60.0/255, 40.0/255, 20.0/255, 0.08))
-		for i in 5:
-			c.draw_polygon(PackedVector2Array([Vector2(i * 30, 0), Vector2(i * 30 + 14, 0), Vector2(i * 30 + 6, 10)]), PackedColorArray([Color(30.0/255, 18.0/255, 10.0/255, 0.55)])))
-
 	# B2 肉壁:暗红底 + 深浅肉色斑块 + 血管纹
 	img = Image.create(256, 256, false, Image.FORMAT_RGB8)
 	img.fill(Color.html("6e3230"))
@@ -470,5 +602,92 @@ func prepare() -> void:
 			var v := (100.0 + randf() * 120.0) / 255.0
 			blend_rect(hi, bx, by, 10.0 + randf() * 24.0, 8.0 + randf() * 16.0, Color(v, v, v, 0.5)), 1.2)
 
+	# ---------- 人物皮肤/布料(灰度基底,靠材质 albedo 染色)----------
+
+	# 皮肤:细毛孔 + 泛红斑(与 skin_n 配合)
+	img = Image.create(128, 128, false, Image.FORMAT_RGB8)
+	for y in 128:
+		for x in 128:
+			var fx := float(x) / 128.0
+			var fy := float(y) / 128.0
+			var g := _vnoise(fx * 9.0, fy * 9.0, 9, 9) * 0.45 \
+				+ _vnoise(fx * 33.0 + 4.0, fy * 33.0, 33, 33) * 0.35 \
+				+ _vnoise(fx * 90.0 + 8.0, fy * 90.0 + 2.0, 90, 90) * 0.2
+			var blotch := smoothstep(0.62, 0.75, _vnoise(fx * 4.0 + 21.0, fy * 4.0 + 13.0, 4, 4)) * 0.10
+			var v := clampf(0.86 + (g - 0.5) * 0.16 - blotch, 0.0, 1.0)
+			img.set_pixel(x, y, Color(v, v * 0.995, v * 0.985))
+	tex.skin = to_texture(img)
+	tex.skin_n = _make_normal(128, func(hi: Image):
+		hi.fill(Color(0.5, 0.5, 0.5))
+		for i in 700:
+			var v := (110.0 + randf() * 60.0) / 255.0
+			blend_rect(hi, randf() * 128.0, randf() * 128.0, 1.6, 1.6, Color(v, v, v, 0.5)), 0.7)
+
+	# 布料:经纬织纹 + 微差 + 皱褶条痕
+	img = Image.create(128, 128, false, Image.FORMAT_RGB8)
+	for y in 128:
+		for x in 128:
+			var fx := float(x) / 128.0
+			var fy := float(y) / 128.0
+			var weave := (sin(fx * TAU * 12.0) * 0.5 + 0.5) * 0.6 + (cos(fy * TAU * 12.0) * 0.5 + 0.5) * 0.4
+			var g := _vnoise(fx * 6.0, fy * 6.0, 6, 6) * 0.5 + _vnoise(fx * 20.0 + 3.0, fy * 20.0, 20, 20) * 0.5
+			var wrinkle := smoothstep(0.55, 0.8, _vnoise(fx * 3.0 + 17.0, fy * 3.0 + 9.0, 3, 3)) * 0.12
+			var v := clampf(0.84 + (weave - 0.5) * 0.10 + (g - 0.5) * 0.10 - wrinkle, 0.0, 1.0)
+			img.set_pixel(x, y, Color(v, v, v * 0.99))
+	tex.cloth = to_texture(img)
+	tex.cloth_n = _make_normal(128, func(hi: Image):
+		hi.fill(Color(0.5, 0.5, 0.5))
+		for y in 128:
+			for x in 128:
+				var w := sin(float(x) / 128.0 * TAU * 12.0) * 0.5 + cos(float(y) / 128.0 * TAU * 12.0) * 0.5
+				var v := 0.5 + w * 0.06
+				hi.set_pixel(x, y, Color(v, v, v))
+		for i in 26:
+			blend_rect(hi, randf() * 128.0, randf() * 128.0, 2.0 + randf() * 3.0, 30.0 + randf() * 70.0, Color(0.32, 0.32, 0.32, 0.35)), 1.0)
+
+	# 纸纹(纸人躯体):纸底 + 竖向纤维 + 斑点
+	img = Image.create(128, 256, false, Image.FORMAT_RGB8)
+	for y in 256:
+		for x in 128:
+			var fx := float(x) / 128.0
+			var fy := float(y) / 256.0
+			var g := _vnoise(fx * 7.0, fy * 7.0, 7, 7) * 0.5 + _vnoise(fx * 30.0 + 3.0, fy * 30.0, 30, 30) * 0.5
+			var fiber := sin(fy * 480.0 + _vnoise(fx * 12.0, fy * 12.0, 12, 12) * 6.0) * 0.03
+			var v := clampf(0.88 + (g - 0.5) * 0.10 + fiber, 0.0, 1.0)
+			img.set_pixel(x, y, Color(v, v * 0.985, v * 0.94))
+	tex.papergrain = to_texture(img)
+
+	# B2 脉络 emission:黑底 + 暗红随机走向粗线
+	img = Image.create(128, 128, false, Image.FORMAT_RGB8)
+	img.fill(Color(0.05, 0.012, 0.018))
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	for i in 14:
+		var vx := rng.randf() * 128.0
+		var vy := rng.randf() * 128.0
+		var ang := rng.randf() * TAU
+		for j in 24:
+			ang += (rng.randf() - 0.5) * 0.9
+			var ln := 3.0 + rng.randf() * 4.0
+			var nx := vx + cos(ang) * ln
+			var ny := vy + sin(ang) * ln
+			_img_line(img, vx, vy, nx, ny, 1.5 + rng.randf() * 2.0, Color(0.55, 0.08, 0.06))
+			vx = nx
+			vy = ny
+	tex.vein = to_texture(img)
+
 func has(name: String) -> bool:
 	return tex.has(name) and tex[name] != null
+
+## 逐像素粗线(供 CPU 画布纹理用)
+static func _img_line(img: Image, x0: float, y0: float, x1: float, y1: float, w: float, col: Color) -> void:
+	var steps := int(maxf(absf(x1 - x0), absf(y1 - y0))) + 1
+	var hw := w * 0.5
+	for i in steps + 1:
+		var t := float(i) / float(steps)
+		var px := lerpf(x0, x1, t)
+		var py := lerpf(y0, y1, t)
+		for yy in range(int(py - hw), int(py + hw) + 1):
+			for xx in range(int(px - hw), int(px + hw) + 1):
+				if xx >= 0 and xx < img.get_width() and yy >= 0 and yy < img.get_height():
+					img.set_pixel(xx, yy, col)

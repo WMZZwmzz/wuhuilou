@@ -44,6 +44,8 @@ var _heart_p: AudioStreamPlayer = null
 var _heart_key := ""
 var _h_rate := -1
 var _h_acc := 0.0
+# 第二心音 / 叮声二连音的延迟播放:统一在 _process 排程,免每次新建 SceneTreeTimer
+var _delayed := []      # [剩余秒数, Callable]
 
 func _ready() -> void:
 	_setup_buses()
@@ -105,13 +107,24 @@ func _load_external() -> void:
 			ext_loaded += 1
 
 func _process(delta: float) -> void:
+	# 延迟回调排程(第二心音 0.18s / 叮声二连音 0.16s):不逐次建 SceneTreeTimer
+	for i in range(_delayed.size() - 1, -1, -1):
+		var d: Array = _delayed[i]
+		d[0] -= delta
+		if float(d[0]) <= 0.0:
+			_delayed.remove_at(i)
+			(d[1] as Callable).call()
 	# 心跳节拍(合成回退模式;外部资源走 heart() 内的循环流切换)
 	if _h_rate > 0:
 		_h_acc += delta
 		if _h_acc >= _h_rate / 1000.0:
 			_h_acc = 0.0
 			play_buf("heart1", 0.28)
-			get_tree().create_timer(0.18).timeout.connect(func(): play_buf("heart2", 0.2))
+			_delay(0.18, func(): play_buf("heart2", 0.2))
+
+## 秒级延迟回调(_process 排程;Sfx 常驻节点,生命周期与场景一致)
+func _delay(sec: float, fn: Callable) -> void:
+	_delayed.append([sec, fn])
 
 # ---------- 合成原语 ----------
 
@@ -296,7 +309,7 @@ func _start(p: AudioStreamPlayer, stream: AudioStream, vol: float, pitch: float)
 
 func ding() -> void:
 	play_buf("ding", 0.9)
-	get_tree().create_timer(0.16).timeout.connect(func(): play_buf("ding2", 0.75, 0.82))
+	_delay(0.16, func(): play_buf("ding2", 0.75, 0.82))
 
 func click() -> void:
 	play_buf("click", 0.9)

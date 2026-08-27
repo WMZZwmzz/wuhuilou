@@ -7,7 +7,7 @@ const NUM := {
 	"flashDrain": 0.3,     # 开手电理智流失/秒
 	"safeHeal": 0.5,       # 安全区理智回复/秒
 	"violation": 15.0,     # 违反规则惩罚
-	"contactDrain": 5.0,   # 接触性事件
+	"contactDrain": 5.0,   # 接触性事件(Demo 未实现逐秒接触流失,B1 被抓/9F 黑影为一次性扣值)
 	"batteryDrain": 1.0,   # 手电耗电/秒
 	"batteryGain": 50.0,   # 换电池回复
 	"runCost": 10.0,       # 奔跑体力/秒
@@ -19,6 +19,7 @@ const NUM := {
 var playing := false
 var paused := false
 var modal_open := false
+var riding := false      # 乘梯转场中:锁旧楼层交互,防双程竞态
 var sanity := 100.0
 var battery := 50.0
 var has_flash := false
@@ -42,28 +43,4 @@ var flags := {}          # 各层谜题/事件旗标(死亡保留)
 var candle_timer := 0.0
 var running := false
 var crouching := false   # 蹲伏状态(3F 躲苏梅 / B1 躲老周判定用,每帧由 main 更新)
-
-func reset_run() -> void:
-	playing = false
-	modal_open = false
-	sanity = 100.0
-	battery = 50.0
-	has_flash = false
-	flash_on = false
-	stamina = 100.0
-	stamina_lock = false
-	time = 0.0
-	batteries = 1
-	pills = {"a": 0, "b": 0}
-	candles = 0
-	knows_pills = false
-	relics = 0
-	relic_names = []
-	cards = {"3F": false, "4F": false, "5F": false, "6F": false, "7F": false,
-		"8F": false, "9F": false, "10F": false, "11F": false, "12F": false,
-		"13F": false, "B1": false, "B2": false}
-	floor_id = "1F"
-	deaths = 0
-	violations = 0
-	flags = {}
-	candle_timer = 0.0
+# 注:无 reset_run()——重开一律走 get_tree().reload_current_scene(),状态随场景整体重建。

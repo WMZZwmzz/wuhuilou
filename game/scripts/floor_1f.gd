@@ -1,6 +1,12 @@
 extends RefCounted
 ## 1F 大堂(教学)
 
+## 延迟字幕:绑在 Main 节点的 tween 上,节点释放时 tween 自动失效,不残留回调
+static func _delayed_msg(m, delay: float, text: String, dur: float) -> void:
+	var tw: Tween = m.create_tween()
+	tw.tween_interval(delay)
+	tw.tween_callback(func() -> void: m.H.show_msg(text, dur))
+
 static func build(m) -> void:
 	m.setup_env(0.32, Color.html("4a4a42"), Color.html("0c0d0a"), 0.03)
 	FloorCommon.room_shell(m, 20.0, 16.0)
@@ -28,6 +34,7 @@ static func build(m) -> void:
 		"tex": m.T.tex.get("monitor"), "emission_tex": m.T.tex.get("monitor"),
 		"emission": Color.html("5a7a5e"), "emission_energy": 1.5, "roughness": 0.35,
 		"color": Color.html("0c1410") if m.T.tex.get("monitor") == null else Color.WHITE,
+		"no_cache": true,   # 贴图缺失分支随后会改写 emission_texture
 	})
 	if m.T.tex.get("monitor") == null:
 		mon_mat.emission_texture = null
@@ -35,10 +42,11 @@ static func build(m) -> void:
 	var mon_cb := func() -> void:
 		if not m.G.flags.get("monSeen", false):
 			m.G.flags["monSeen"] = true
-			m.change_sanity(-10.0)
+			var shock_drain := 10.0   # 监控惊吓一次性扣值(文案同源)
+			m.change_sanity(-shock_drain)
 			m.H.red_flash()
 			m.S.sting()
-			m.H.show_msg("监控画面里,大楼铁门外站着一个人。\n那件外套……是你身上这件。理智 −10", 5.6)
+			m.H.show_msg("监控画面里,大楼铁门外站着一个人。\n那件外套……是你身上这件。理智 −%d" % int(shock_drain), 5.6)
 		else:
 			m.H.show_msg("监控雪花闪了闪。门外的人,还在。")
 	m.add_inter(Vector3(8, 1.5, -6.6), "监控屏幕", mon_cb, 2.2)
@@ -106,15 +114,12 @@ static func build(m) -> void:
 	var mail_cb := func() -> void:
 		m.H.show_msg("所有信箱都锈死了。只有一格塞着水电费催缴单——日期是三十年前。")
 	m.add_inter(Vector3(-7.5, 1.2, -7.5), "信箱", mail_cb, 2.2)
-	# 教学字幕
-	# 教学字幕:挂在 SceneTree 上的计时器不随 Main 释放,
-	# 场景重载后旧计时器仍可能回调 → 访问已释放的 m/H。先判活。
-	m.get_tree().create_timer(0.7).timeout.connect(func() -> void:
-		if is_instance_valid(m): m.H.show_msg("午夜 0:00。铁门在身后合拢,消失了。", 4.2))
-	m.get_tree().create_timer(5.4).timeout.connect(func() -> void:
-		if is_instance_valid(m): m.H.show_msg("保安室(东侧)里有手电。用 [WASD] 走过去,[E] 互动。", 5.0))
-	m.get_tree().create_timer(9.8).timeout.connect(func() -> void:
-		if is_instance_valid(m): m.H.show_msg("按住 [Ctrl] 可以蹲下。有些东西,只有蹲下的人才拿得到、躲得过。", 5.2))
+	# 教学字幕:延迟回调绑在 Main 的 tween 上——节点释放时 tween 一并失效。
+	# (原先挂在 SceneTree 计时器上,场景重载后仍会回调,引擎会报
+	#   "Lambda capture was freed" —— 即便守卫住了也会打印错误。)
+	_delayed_msg(m, 0.7, "午夜 0:00。铁门在身后合拢,消失了。", 4.2)
+	_delayed_msg(m, 5.4, "保安室(东侧)里有手电。用 [WASD] 走过去,[E] 互动。", 5.0)
+	_delayed_msg(m, 9.8, "按住 [Ctrl] 可以蹲下。有些东西,只有蹲下的人才拿得到、躲得过。", 5.2)
 	m.tp_list([
 		{"x": 6.9, "z": -5.2, "yaw": 0.0},
 		{"x": 5.0, "z": -6.0, "yaw": 0.0},

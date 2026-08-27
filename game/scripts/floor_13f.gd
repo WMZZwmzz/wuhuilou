@@ -47,7 +47,7 @@ static func build(m) -> void:
 	pl2.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	pl2.position = Vector3(0, 2.0, -7.77)
 	m.floor_root.add_child(pl2)
-	m.add_light(Color.html("e8d8a8"), 0.5, 5.0, 0, 2.0, -6.8, 0.08)
+	m.add_light(Color.html("e8d8a8"), 0.5, 5.0, 0, 2.0, -6.8, 0.08, false)
 	var end_cb := func() -> void:
 		if m.G.flags.get("diaryRead", false):
 			m.H.show_msg("日记贴身收着。她不在这一层——在 B2,在锅炉旁,在那颗\"心脏\"边上。", 4.6)
@@ -77,8 +77,8 @@ static func build(m) -> void:
 										m.add_game_minutes(10)
 										m.change_sanity(-10.0)
 										m.H.red_flash()
-										m.get_tree().create_timer(2.6).timeout.connect(func(): m.gain_card("B1"))
-										m.get_tree().create_timer(5.2).timeout.connect(func() -> void:
+										m.after(2.6, func(): m.gain_card("B1"))
+										m.after(5.2, func() -> void:
 											m.H.show_msg("电梯面板上,一个从未亮过的按钮亮了:B1。\n出口钥匙在老周身上。结局,在锅炉房。", 6.0))
 										m.H.set_objective("下行 B1 停车场 —— 出口钥匙在老周身上")}],
 								})}],

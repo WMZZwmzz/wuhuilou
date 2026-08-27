@@ -19,48 +19,27 @@ static func build(m) -> void:
 	Props.mahjong_heap(m, m.floor_root, 0.72, 0.85, -0.5)
 	Props.mahjong_heap(m, m.floor_root, -0.7, 0.85, -0.62)
 	# 陈守财:背对入口(-Z 方向坐,面朝北),玩家从南侧电梯来看到的是背影
-	var man := Node3D.new()
-	var cloth: StandardMaterial3D = m.pmat({"color": Color.html("2e3440")})
-	var skin: StandardMaterial3D = m.pmat({"color": Color.html("8a7a62"), "roughness": 0.85})
+	# 参数化人形:老年驼背 + 长衫 + 无脸白板(平时藏在脑后,转头后正对玩家)
+	var fig := Props.human_figure(m, {
+		"pose": "sit", "hunch": 0.55, "robe": true,
+		"face": "blank", "hair": "short",
+		"top_hex": "2e3440", "skin_hex": "8a7a62", "hair_hex": "3a342c",
+	})
+	var man: Node3D = fig["root"]
+	var head: Node3D = fig["head"]
+	# 右手捏着一张立牌(前臂微抬)
+	fig["fore_r"].rotation.x = 1.45
+	var tile := MeshInstance3D.new()
+	var tb := BoxMesh.new()
+	tb.size = Vector3(0.05, 0.024, 0.07)
+	tile.mesh = tb
+	tile.material_override = m.pmat({"color": Color.html("ede6d2"), "roughness": 0.45})
+	tile.rotation.z = 0.35
+	tile.position = Vector3(0, -0.365, -0.005)
+	tile.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	fig["fore_r"].add_child(tile)
+	# 坐椅:座板 + 四腿 + 靠背板 + 顶帽(靠背在身后 +Z 侧)
 	var wood: StandardMaterial3D = m.pmat({"color": Color.html("40301e"), "roughness": 0.72})
-	var body := MeshInstance3D.new()
-	var bc := CylinderMesh.new()
-	bc.top_radius = 0.26
-	bc.bottom_radius = 0.34
-	bc.height = 0.62
-	body.mesh = bc
-	body.material_override = cloth
-	body.position = Vector3(0, 0.77, 0)
-	var head := MeshInstance3D.new()
-	var hs := SphereMesh.new()
-	hs.radius = 0.17
-	hs.height = 0.34
-	head.mesh = hs
-	head.material_override = skin
-	head.position = Vector3(0, 1.12, 0)
-	# 后脑(深色,盖住头后侧)
-	var hair := MeshInstance3D.new()
-	var hsm := SphereMesh.new()
-	hsm.radius = 0.158
-	hsm.height = 0.316
-	hair.mesh = hsm
-	hair.material_override = m.pmat({"color": Color.html("3a342c"), "roughness": 0.95})
-	hair.position = Vector3(0, 0.03, 0.045)
-	head.add_child(hair)
-	# 白板脸:平时藏在脑后,转头后正对玩家
-	var blank := MeshInstance3D.new()
-	var bcm := CylinderMesh.new()
-	bcm.top_radius = 0.125
-	bcm.bottom_radius = 0.125
-	bcm.height = 0.012
-	bcm.radial_segments = 20
-	blank.mesh = bcm
-	blank.material_override = m.pmat({"color": Color.html("e8e2d4"), "roughness": 0.9})
-	blank.rotation.x = PI / 2.0
-	blank.position = Vector3(0, -0.01, -0.162)
-	blank.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	head.add_child(blank)
-	# 坐椅:座板 + 四腿 + 靠背板 + 顶帽
 	var seat := MeshInstance3D.new()
 	var sb := BoxMesh.new()
 	sb.size = Vector3(0.5, 0.05, 0.48)
@@ -81,109 +60,15 @@ static func build(m) -> void:
 	cb.size = Vector3(0.5, 0.7, 0.08)
 	chair_b.mesh = cb
 	chair_b.material_override = wood
-	chair_b.position = Vector3(0, 0.55, -0.32)
+	chair_b.position = Vector3(0, 0.55, 0.32)
 	man.add_child(chair_b)
 	var cap := MeshInstance3D.new()
 	var cmb := BoxMesh.new()
 	cmb.size = Vector3(0.54, 0.06, 0.1)
 	cap.mesh = cmb
 	cap.material_override = wood
-	cap.position = Vector3(0, 0.93, -0.32)
+	cap.position = Vector3(0, 0.93, 0.32)
 	man.add_child(cap)
-	# 肩、腿、鞋(坐姿:大腿前伸、小腿垂地)
-	for sx: float in [-0.23, 0.23]:
-		var sh := MeshInstance3D.new()
-		var shm := SphereMesh.new()
-		shm.radius = 0.085
-		shm.height = 0.17
-		sh.mesh = shm
-		sh.material_override = cloth
-		sh.position = Vector3(sx, 0.98, 0)
-		man.add_child(sh)
-	for sx: float in [-0.1, 0.1]:
-		var thigh := MeshInstance3D.new()
-		var tc := CylinderMesh.new()
-		tc.top_radius = 0.065
-		tc.bottom_radius = 0.065
-		tc.height = 0.32
-		thigh.mesh = tc
-		thigh.material_override = cloth
-		thigh.rotation.x = PI / 2.0
-		thigh.position = Vector3(sx, 0.52, -0.18)
-		man.add_child(thigh)
-		var calf := MeshInstance3D.new()
-		var cc := CylinderMesh.new()
-		cc.top_radius = 0.05
-		cc.bottom_radius = 0.05
-		cc.height = 0.3
-		calf.mesh = cc
-		calf.material_override = cloth
-		calf.position = Vector3(sx, 0.29, -0.32)
-		man.add_child(calf)
-		var shoe := MeshInstance3D.new()
-		var smb := BoxMesh.new()
-		smb.size = Vector3(0.09, 0.06, 0.15)
-		shoe.mesh = smb
-		shoe.material_override = m.pmat({"color": Color.html("1e1a16"), "roughness": 0.85})
-		shoe.position = Vector3(sx, 0.03, -0.35)
-		man.add_child(shoe)
-	# 双臂:右手摸牌持立牌,左手搭桌
-	var uarm := MeshInstance3D.new()
-	var uc := CylinderMesh.new()
-	uc.top_radius = 0.045
-	uc.bottom_radius = 0.045
-	uc.height = 0.26
-	uarm.mesh = uc
-	uarm.material_override = cloth
-	uarm.rotation.x = -0.7
-	uarm.position = Vector3(0.24, 0.86, -0.08)
-	man.add_child(uarm)
-	var farm := MeshInstance3D.new()
-	var fc := CylinderMesh.new()
-	fc.top_radius = 0.04
-	fc.bottom_radius = 0.04
-	fc.height = 0.24
-	farm.mesh = fc
-	farm.material_override = cloth
-	farm.rotation.x = -1.35
-	farm.position = Vector3(0.23, 0.72, -0.28)
-	man.add_child(farm)
-	var hand := MeshInstance3D.new()
-	var hdm := SphereMesh.new()
-	hdm.radius = 0.045
-	hdm.height = 0.09
-	hand.mesh = hdm
-	hand.material_override = skin
-	hand.position = Vector3(0.22, 0.7, -0.4)
-	man.add_child(hand)
-	var tile := MeshInstance3D.new()
-	var tb := BoxMesh.new()
-	tb.size = Vector3(0.05, 0.024, 0.07)
-	tile.mesh = tb
-	tile.material_override = m.pmat({"color": Color.html("ede6d2"), "roughness": 0.45})
-	tile.rotation.z = 0.35
-	tile.position = Vector3(0.22, 0.735, -0.46)
-	tile.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	man.add_child(tile)
-	var uarm2 := MeshInstance3D.new()
-	uarm2.mesh = uc
-	uarm2.material_override = cloth
-	uarm2.rotation = Vector3(-0.5, 0, 0.3)
-	uarm2.position = Vector3(-0.24, 0.86, -0.06)
-	man.add_child(uarm2)
-	var farm2 := MeshInstance3D.new()
-	farm2.mesh = fc
-	farm2.material_override = cloth
-	farm2.rotation.x = -1.2
-	farm2.position = Vector3(-0.25, 0.74, -0.24)
-	man.add_child(farm2)
-	var hand2 := MeshInstance3D.new()
-	hand2.mesh = hdm
-	hand2.material_override = skin
-	hand2.position = Vector3(-0.25, 0.71, -0.36)
-	man.add_child(hand2)
-	man.add_child(body)
-	man.add_child(head)
 	man.position = Vector3(0, 0, -1.5)
 	man.rotation.y = 0.0
 	m.floor_root.add_child(man)
@@ -195,9 +80,9 @@ static func build(m) -> void:
 		m.G.flags["mjSolved"] = true
 		m.add_game_minutes(10)
 		m.gain_relic("缺白板的麻将")
-		m.get_tree().create_timer(2.8).timeout.connect(func(): m.gain_card("3F"))
-		m.get_tree().create_timer(6.4).timeout.connect(func(): m.H.show_msg("老人的声音在背后响起,很轻:\"……替我,摸一把。\"", 4.6))
-		m.get_tree().create_timer(8.0).timeout.connect(func() -> void:
+		m.after(2.8, func(): m.gain_card("3F"))
+		m.after(6.4, func(): m.H.show_msg("老人的声音在背后响起,很轻:\"……替我,摸一把。\"", 4.6))
+		m.after(8.0, func() -> void:
 			if is_instance_valid(man):
 				man.visible = false)
 		m.H.set_objective("乘电梯前往 3F 幼儿园")
@@ -210,16 +95,16 @@ static func build(m) -> void:
 		m.H.red_flash()
 		m.S.sting()
 		m.shake = 2.0
-		m.H.show_msg("老人的头,缓缓地、缓缓地转了过来。\n一直转过了肩膀。那里没有五官,只有一张白板般的脸。理智 −15", 6.0)
-		m.get_tree().create_timer(0.6).timeout.connect(func() -> void:
+		m.H.show_msg("老人的头,缓缓地、缓缓地转了过来。\n一直转过了肩膀。那里没有五官,只有一张白板般的脸。理智 −%d" % int(m.G.NUM["violation"]), 6.0)
+		m.after(0.6, func() -> void:
 			if is_instance_valid(man):
 				man.rotation.y = PI)
-		m.get_tree().create_timer(4.2).timeout.connect(func() -> void:
+		m.after(4.2, func() -> void:
 			if is_instance_valid(man):
 				man.visible = false
 			m.H.show_msg("你跌坐在地。再抬头时,桌边的椅子空了。", 4.2)
 			if violate and not m.G.flags.get("mjSolved", false):
-				m.get_tree().create_timer(3.2).timeout.connect(func(): solve_mj.call()))
+				m.after(3.2, func(): solve_mj.call()))
 	var mj_cb := func() -> void:
 		m.open_modal({
 			"title": "麻 将 桌",

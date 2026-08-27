@@ -31,7 +31,7 @@ static func build(m) -> void:
 	var box_mat: StandardMaterial3D = m.pmat({"color": Color.html("5a5e58"), "metallic": 0.4, "roughness": 0.5})
 	var fuse: MeshInstance3D = m.add_box(0.6, 0.9, 0.3, box_mat, -5.6, 1.3, 5.7)
 	m.colliders.append(Rect2(-5.95, 5.5, 0.7, 0.4))
-	var fuse_light: OmniLight3D = m.add_light(Color.html("8ab0c8"), 0.3, 3.0, -5.6, 1.8, 5.4, 0.1)
+	var fuse_light: OmniLight3D = m.add_light(Color.html("8ab0c8"), 0.3, 3.0, -5.6, 1.8, 5.4, 0.1, false)
 	var bat12 := Props.battery_prop(m)
 	bat12.rotation.z = PI / 2.0
 	bat12.position = Vector3(-5.2, 0.045, 5.4)
@@ -92,8 +92,8 @@ static func build(m) -> void:
 				m.close_modal()
 				m.gain_relic("半张全家福")
 				m.change_sanity(2.0)
-				m.get_tree().create_timer(2.8).timeout.connect(func(): m.gain_card("13F"))
-				m.get_tree().create_timer(5.6).timeout.connect(func() -> void:
+				m.after(2.8, func(): m.gain_card("13F"))
+				m.after(5.6, func() -> void:
 					m.H.show_msg("父子相拥的身影淡去。照片背面写着:\n\"一家三口,少了妈妈,也少了我们。\"\n雾,散了一角。", 6.0))
 				m.H.set_objective("权限卡13F到手。乘电梯前往 13F —— 妹妹在 1304")}],
 		})
@@ -108,7 +108,7 @@ static func build(m) -> void:
 					m.close_modal()
 					m.G.flags["looped12F"] = true
 					m.H.show_msg("你跃入雾中。下坠,下坠——\n\"叮——\"电梯到了。大堂的灯,还亮着。", 5.0)
-					m.get_tree().create_timer(2.0).timeout.connect(func(): m.ride_to("1F", true))},
+					m.after(2.0, func(): m.ride_to("1F", true))},
 				{"text": "退回来", "fn": func() -> void: m.close_modal()},
 			],
 		})

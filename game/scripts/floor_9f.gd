@@ -10,29 +10,27 @@ static func build(m) -> void:
 	for x: float in [-7.5, -4.5, -1.5, 1.5, 4.5]:
 		Props.mirror_stand(m, x, -6.0, 0.0)
 		m.colliders.append(Rect2(x - 0.45, -6.3, 0.9, 0.6))
-	# 镜像复制体:黑色人形,镜像 x、延迟 0.5s 跟随玩家
-	var replica := MeshInstance3D.new()
-	var rq := QuadMesh.new()
-	rq.size = Vector2(0.8, 1.8)
-	replica.mesh = rq
-	var rmat := StandardMaterial3D.new()
-	rmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	rmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	rmat.albedo_color = Color(0.02, 0.02, 0.04, 0.9)
-	replica.material_override = rmat
-	replica.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# 镜像复制体:黑色无脸人形(雕刻剪影体),镜像 x、延迟 0.5s 跟随玩家
+	# merge_static:肢体不动的剪影并成单网格(A4);缓存键含剪影 alpha 与楼层实例 id
+	var replica := Node3D.new()
+	var rfig := Props.human_figure(m, {"pose": "stand", "face": "none", "hair": "bald", "silhouette": true})
+	Humanoid.merge_static(rfig["root"], "mirror9f:%s" % m.get_instance_id())
+	var rbody: Node3D = rfig["root"]
+	rbody.position = Vector3(0, -1.0, 0)
+	replica.add_child(rbody)
 	m.floor_root.add_child(replica)
-	# 影子(黑暗实体化)
-	var shadow := MeshInstance3D.new()
-	var sq := QuadMesh.new()
-	sq.size = Vector2(0.9, 2.0)
-	shadow.mesh = sq
-	var smat := StandardMaterial3D.new()
-	smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	smat.albedo_color = Color(0, 0, 0, 0.92)
-	shadow.material_override = smat
-	shadow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# 影子(黑暗实体化):三层同心剪影壳,凝聚成"更深的黑"
+	var shadow := Node3D.new()
+	for k in 3:
+		var shfig := Props.human_figure(m, {
+			"pose": "stand", "face": "none", "hair": "bald", "silhouette": true,
+			"sil_alpha": [0.18, 0.26, 0.34][k],
+		})
+		Humanoid.merge_static(shfig["root"], "shadow9f:%d:%s" % [k, m.get_instance_id()])
+		var sh_body: Node3D = shfig["root"]
+		sh_body.position = Vector3(0, -1.0, 0)
+		sh_body.scale = Vector3.ONE * [1.06, 1.0, 0.92][k]
+		shadow.add_child(sh_body)
 	shadow.visible = false
 	m.floor_root.add_child(shadow)
 	# 同步谜题(镜厅中央标记点)
@@ -45,7 +43,7 @@ static func build(m) -> void:
 	mark.material_override = m.pmat({"color": Color.html("8a929c"), "emission": Color.html("6a7484"), "emission_energy": 0.7, "roughness": 0.4})
 	mark.position = Vector3(0, 0.012, -4.0)
 	m.floor_root.add_child(mark)
-	m.add_light(Color.html("b8c8dc"), 0.4, 6.0, 0, 2.4, -4.0, 0.08)
+	m.add_light(Color.html("b8c8dc"), 0.4, 6.0, 0, 2.4, -4.0, 0.08, false)
 	var solve_mirror := func() -> void:
 		m.G.flags["mirror9F"] = true
 		m.add_game_minutes(10)
@@ -56,12 +54,12 @@ static func build(m) -> void:
 		m.S.sting()
 		m.shake = 2.4
 		m.H.show_msg("整面镜墙\"哗啦\"碎裂。碎片在地面拼出一个人形,缓缓站起——\n一半是你,一半是别的什么。", 6.0)
-		m.get_tree().create_timer(4.2).timeout.connect(func() -> void:
+		m.after(4.2, func() -> void:
 			m.gain_relic("裂成两半的镜子")
 			m.change_sanity(2.0))
-		m.get_tree().create_timer(7.2).timeout.connect(func() -> void:
+		m.after(7.2, func() -> void:
 			m.H.show_msg("\"火灾毁了我的脸。镜子里那个人,一半是我,一半是我害怕的样子。\"\n\"谢谢你,让我看清楚。\"——她合拢两半镜子,裂纹消失了。理智 +2", 6.4))
-		m.get_tree().create_timer(10.6).timeout.connect(func(): m.gain_card("10F"))
+		m.after(10.6, func(): m.gain_card("10F"))
 		m.H.set_objective("权限卡10F到手。乘电梯前往 10F 宴会厅")
 	var sync_cb := func() -> void:
 		if m.G.flags.get("mirror9F", false):
@@ -79,7 +77,7 @@ static func build(m) -> void:
 					m.change_sanity(-m.G.NUM["violation"])
 					m.H.red_flash()
 					m.S.sting()
-					m.H.show_msg("镜中的你停住了。它先转身,背对你——\n你背后有什么东西贴了上来,冰的。理智 −15", 5.4)},
+					m.H.show_msg("镜中的你停住了。它先转身,背对你——\n你背后有什么东西贴了上来,冰的。理智 −%d" % int(m.G.NUM["violation"]), 5.4)},
 				{"text": "不等了,一拳砸碎镜子", "fn": func() -> void:
 					m.close_modal()
 					m.change_sanity(-10.0)
@@ -110,17 +108,27 @@ static func build(m) -> void:
 			"choices": [{"text": "记住了", "fn": func() -> void: m.close_modal()}],
 		}), 2.0)
 	# 楼层逻辑:镜像延迟复制 + 影子黑暗实体化(解谜后两者皆退场)
-	var state := {"hist": [], "dark_t": 0.0, "shadow_msg": false}
+	# 历史采样用固定长度环形缓冲(pop_front 的 O(n) 搬移换游标递增)
+	var state := {"hist": [], "hist_i": 0, "dark_t": 0.0, "shadow_msg": false}
 	m.floor_update = func(dt: float) -> void:
 		if m.G.flags.get("mirror9F", false):
 			return
 		# 镜像:记录 0.5s 前的位置,镜像 x 呈现
-		state["hist"].append({"x": m.player_pos.x, "z": m.player_pos.z, "t": Time.get_ticks_msec() / 1000.0})
 		var now: float = Time.get_ticks_msec() / 1000.0
-		while state["hist"].size() > 2 and state["hist"][0]["t"] < now - 0.5:
-			state["hist"].pop_front()
-		if is_instance_valid(replica) and state["hist"].size() > 0:
+		var sample := {"x": m.player_pos.x, "z": m.player_pos.z, "t": now}
+		if state["hist"].size() < 40:
+			state["hist"].append(sample)
+			state["hist_i"] = state["hist"].size() - 1
+		else:
+			state["hist_i"] = (int(state["hist_i"]) + 1) % 40
+			state["hist"][state["hist_i"]] = sample
+		if is_instance_valid(replica):
 			var old: Dictionary = state["hist"][0]
+			for h: Dictionary in state["hist"]:
+				if float(h["t"]) <= now - 0.5:
+					old = h   # 环形序里最后一个满足 ≥0.5s 前的样本即最接近 0.5s 前
+				else:
+					break
 			replica.position = Vector3(-float(old["x"]), 1.0, float(old["z"]))
 			replica.look_at(Vector3(m.player_pos.x, 1.0, m.player_pos.z))
 		# 影子:连续黑暗 5s 实体化,光照立即消散
@@ -148,10 +156,11 @@ static func build(m) -> void:
 				if dir.length() < 1.2:
 					state["dark_t"] = 0.0
 					shadow.visible = false
-					m.change_sanity(-10.0)
+					var touch_drain := 10.0   # 黑影接触一次性扣值(文案同源)
+					m.change_sanity(-touch_drain)
 					m.H.red_flash()
 					m.S.sting()
-					m.H.show_msg("冰冷的指尖掐上你的后颈,又化作烟。理智 −10\n(开手电[F]——光,是它的边界。)", 5.0)
+					m.H.show_msg("冰冷的指尖掐上你的后颈,又化作烟。理智 −%d\n(开手电[F]——光,是它的边界。)" % int(touch_drain), 5.0)
 	m.tp_list([
 		{"x": 0.0, "z": -2.8, "yaw": 0.0},
 		{"x": -4.5, "z": -4.6, "yaw": 0.0},

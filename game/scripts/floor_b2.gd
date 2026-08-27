@@ -17,32 +17,64 @@ static func build(m) -> void:
 	for p: Array in [[-6.0, -5.0], [6.0, -5.0], [-6.5, 4.5]]:
 		Props.boiler_unit(m, p[0], p[1], 0.0)
 		m.colliders.append(Rect2(p[0] - 0.8, p[1] - 0.8, 1.6, 1.6))
-		m.add_light(Color.html("e05a3a"), 0.4, 5.5, p[0], 2.4, p[1], 0.3)
-	# 核心("母亲"):球簇 + 脉动红光
+		m.add_light(Color.html("e05a3a"), 0.4, 5.5, p[0], 2.4, p[1], 0.3, false)
+	# 核心("母亲"):噪声位移有机体 + 表面浮现的脸 + 曲面根须 + 脉动红光
 	var core := Node3D.new()
-	var core_mat := StandardMaterial3D.new()
-	core_mat.albedo_color = Color.html("7a2c28")
-	core_mat.roughness = 0.55
-	core_mat.emission_enabled = true
+	var core_mat: StandardMaterial3D = m.pmat({
+		"color": Color.html("7a2c28"), "tex": m.T.tex.get("flesh"),
+		"normal": m.T.tex.get("flesh_n"), "normal_scale": 0.8,
+		"roughness": 0.55, "emission_tex": m.T.tex.get("vein"), "emission_energy": 1.0,
+		"no_cache": true,   # 随后整体覆写 emission 色
+	})
 	core_mat.emission = Color.html("a8282a")
-	core_mat.emission_energy_multiplier = 0.8
 	var big := MeshInstance3D.new()
-	var bs := SphereMesh.new()
-	bs.radius = 0.85
-	bs.height = 1.7
-	big.mesh = bs
+	big.mesh = Humanoid.sculpt_sphere(0.85, 20, 16, func(dir: Vector3, _u: float, _v: float) -> Vector3:
+		var n := TexGen._vnoise(dir.x * 3.0 + 7.0, dir.y * 3.0 + 3.0, 4, 4) * 0.5 \
+			+ TexGen._vnoise(dir.z * 6.0 + 2.0, dir.x * 6.0 + 9.0, 6, 6) * 0.3 \
+			+ TexGen._vnoise(dir.y * 12.0 + 5.0, dir.z * 12.0 + 11.0, 12, 12) * 0.2
+		return dir * (n - 0.5) * 0.5)
 	big.material_override = core_mat
 	big.position = Vector3(0, 1.5, 0)
 	core.add_child(big)
-	for p: Array in [[0.7, 0.9, 0.3], [-0.6, 2.1, -0.2], [0.3, 2.2, 0.5], [-0.75, 0.8, -0.4]]:
-		var s := MeshInstance3D.new()
-		var sm := SphereMesh.new()
-		sm.radius = 0.3
-		sm.height = 0.6
-		s.mesh = sm
-		s.material_override = core_mat
-		s.position = Vector3(p[0], p[1], p[2])
-		core.add_child(s)
+	# 浮现的脸:半沉入肉壁,缓慢隆起又陷没(美术指南:无数张脸隐约浮现)
+	var faces: Array = []
+	var face_mesh := Humanoid.mini_face(0.2)
+	for i in 5:
+		var ang := i * TAU / 5.0 + 0.6
+		var out_dir := Vector3(cos(ang), 0.0, sin(ang))
+		var fh := Node3D.new()
+		fh.position = Vector3(0, 1.5 + (i % 3 - 1) * 0.42, 0) + out_dir * 0.62
+		fh.rotation.y = atan2(-out_dir.x, -out_dir.z)
+		fh.rotation.x = (i % 2 - 0.5) * 0.2
+		var fmi := MeshInstance3D.new()
+		fmi.mesh = face_mesh
+		fmi.material_override = core_mat
+		fmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		fh.add_child(fmi)
+		core.add_child(fh)
+		faces.append(fh)
+	# 根须:自核心底部斜插入地面(环布六向,贝塞尔锥削管,粗细长短错落)
+	var root_mat: StandardMaterial3D = m.pmat({
+		"color": Color.html("5a201f"), "tex": m.T.tex.get("flesh"),
+		"normal": m.T.tex.get("flesh_n"), "normal_scale": 0.6,
+		"roughness": 0.7, "emission": Color.html("701c1e"), "emission_energy": 0.35,
+	})
+	for i in 6:
+		var piv := Node3D.new()
+		piv.rotation.y = i * TAU / 6.0 + 0.4
+		core.add_child(piv)
+		var bend: float = (i % 3 - 1) * 0.18
+		var pts := [
+			Vector3(0.30, 0.72, 0.0),
+			Vector3(0.62, 0.52, bend),
+			Vector3(0.88, 0.28, bend * 1.6),
+			Vector3(1.0, 0.04, bend * 2.0),
+		]
+		var tend := MeshInstance3D.new()
+		tend.mesh = Humanoid.tube(pts, [0.085 + (i % 3) * 0.018, 0.052, 0.03, 0.012], 10)
+		tend.material_override = root_mat
+		tend.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		piv.add_child(tend)
 	core.position = Vector3(0, 0, -5.6)
 	m.floor_root.add_child(core)
 	m.colliders.append(Rect2(-1.0, -6.6, 2.0, 2.0))
@@ -81,7 +113,7 @@ static func build(m) -> void:
 								m.close_modal()
 								m.S.sting()
 								m.shake = 2.6
-								m.get_tree().create_timer(1.6).timeout.connect(func(): m.start_ending("true"))}],
+								m.after(1.6, func(): m.start_ending("true"))}],
 						})}],
 				})})
 		else:
@@ -95,7 +127,7 @@ static func build(m) -> void:
 					m.close_modal()
 					m.S.sting()
 					m.shake = 2.6
-					m.get_tree().create_timer(1.6).timeout.connect(func(): m.start_ending("sacrifice"))}],
+					m.after(1.6, func(): m.start_ending("sacrifice"))}],
 			})})
 		if m.G.flags.get("knowsTrueVoice", false):
 			ch.append({"text": "换回妹妹——我留下", "disabled": true, "reason": "你已识破它的伪装"})
@@ -104,12 +136,12 @@ static func build(m) -> void:
 				m.close_modal()
 				m.S.sting()
 				m.shake = 2.0
-				m.get_tree().create_timer(1.4).timeout.connect(func(): m.start_ending("replace"))})
+				m.after(1.4, func(): m.start_ending("replace"))})
 		if m.G.flags.get("hasExitKey", false):
 			ch.append({"text": "转身,用出口钥匙逃出大门", "fn": func() -> void:
 				m.close_modal()
 				m.S.ding()
-				m.get_tree().create_timer(1.4).timeout.connect(func(): m.start_ending("escape"))})
+				m.after(1.4, func(): m.start_ending("escape"))})
 		else:
 			ch.append({"text": "转身逃出大门", "disabled": true, "reason": "没有出口钥匙"})
 		m.open_modal({
@@ -126,12 +158,12 @@ static func build(m) -> void:
 					m.close_modal()
 					m.S.sting()
 					m.shake = 2.0
-					m.get_tree().create_timer(1.4).timeout.connect(func(): m.start_ending("replace"))},
+					m.after(1.4, func(): m.start_ending("replace"))},
 				{"text": "推开她——不对劲", "fn": func() -> void:
 					m.close_modal()
 					m.G.flags["knowsTrueVoice"] = true
 					m.H.show_msg("你猛地退开。它学得再像,也只会叫你\"哥\"。", 4.2)
-					m.get_tree().create_timer(1.6).timeout.connect(func(): final_choice.call())},
+					m.after(1.6, func(): final_choice.call())},
 			],
 		})
 	var core_cb := func() -> void:
@@ -152,7 +184,7 @@ static func build(m) -> void:
 								m.G.flags["knowsTrueVoice"] = true
 								m.change_sanity(4.0)
 								m.H.show_msg("\"哥——哥——哥——\"\n声音碎了,一层层剥落成许多人的哭喊。\n它骗不过你。理智 +4", 5.0)
-								m.get_tree().create_timer(2.4).timeout.connect(func(): final_choice.call())},
+								m.after(2.4, func(): final_choice.call())},
 							{"text": "过去,抱住她", "fn": func() -> void:
 								m.close_modal()
 								hug_modal.call()},
@@ -170,15 +202,23 @@ static func build(m) -> void:
 			m.H.show_msg("锁孔的形状,正对着钥匙串里那把打不开任何门的旧钥匙。\n——等十三件遗物都到齐,再回来。", 4.6)
 		else:
 			m.H.show_msg("肉壁上嵌着一把老式的锁孔,像一扇门被活活长死在墙里。", 4.2), 1.8)
-	# 楼层逻辑:核心脉动 + 低鸣 + 心跳声压
-	var state := {"pulse": 0.0}
+	# 楼层逻辑:核心脉动 + 浮脸隆起/陷没 + 低鸣 + 心跳声压
+	var state := {"pulse": 0.0, "face_t": 0.0}
 	m.floor_update = func(dt: float) -> void:
 		state["pulse"] = state["pulse"] + dt
+		state["face_t"] = state["face_t"] + dt
 		var p: float = 0.75 + 0.35 * sin(state["pulse"] * 2.2)
 		if is_instance_valid(core_light):
 			core_light.light_energy = 1.8 * p
 		if is_instance_valid(core):
 			core.scale = Vector3.ONE * (0.96 + 0.06 * p)
+			for i in faces.size():
+				var fh: Node3D = faces[i]
+				if not is_instance_valid(fh):
+					continue
+				var ph: float = sin(state["face_t"] * 0.35 + i * 1.9)
+				fh.scale = Vector3(1.0, maxf(0.15, ph), 1.0)
+				fh.visible = ph > 0.12
 	m.tp_list([
 		{"x": 0.0, "z": -3.4, "yaw": 0.0},
 		{"x": 0.0, "z": -6.4, "yaw": 0.0},

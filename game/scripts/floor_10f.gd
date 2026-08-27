@@ -6,7 +6,7 @@ static func build(m) -> void:
 	FloorCommon.room_shell(m, 20.0, 16.0)
 	FloorCommon.build_elevator(m)
 	m.add_light(Color.html("e8b088"), 0.45, 12.0, 0, 2.9, 0, 0.15)
-	m.add_light(Color.html("c86a58"), 0.35, 8.0, 0, 2.4, -3.5, 0.2)
+	m.add_light(Color.html("c86a58"), 0.35, 8.0, 0, 2.4, -3.5, 0.2, false)
 	# 长桌(中央,东西向)+ 桌布 + 腐烂菜肴
 	m.add_box(11.0, 0.1, 1.6, m.pmat({"color": Color.html("3c2a20"), "roughness": 0.6}), 0, 0.78, 0)
 	m.colliders.append(Rect2(-5.5, -0.8, 11.0, 1.6))
@@ -38,12 +38,14 @@ static func build(m) -> void:
 	var empty_side_idx := 4   # 南排第 5 席:没有假人、没有胸牌的"不存在的客人"之位
 	for i in seat_x.size():
 		var x: float = seat_x[i]
-		# 北排(z=-1.3,朝南)6 席全坐
-		var dn := Props.banquet_dummy(m, x, -1.3, 0.0, "46384a" if i % 2 == 0 else "3a3048")
+		# 北排(z=-1.3,面朝南对桌)6 席全坐(merged=true:静态肢体并成单网格,A4)
+		Props.chair(m, x, -1.3, 0.0)
+		var dn := Props.banquet_dummy(m, x, -1.3, PI, "46384a" if i % 2 == 0 else "3a3048", false, true)
 		dummies.append(dn)
-		# 南排(z=1.3,朝北)5 席 + 1 空位
+		# 南排(z=1.3,面朝北对桌)5 席 + 1 空位(空位有椅无假人)
+		Props.chair(m, x, 1.3, PI)
 		if i != empty_side_idx:
-			var ds := Props.banquet_dummy(m, x, 1.3, PI, "3a3048" if i % 2 == 0 else "46384a")
+			var ds := Props.banquet_dummy(m, x, 1.3, 0.0, "3a3048" if i % 2 == 0 else "46384a", false, true)
 			dummies.append(ds)
 			var tag := MeshInstance3D.new()
 			var tq := QuadMesh.new()
@@ -54,10 +56,11 @@ static func build(m) -> void:
 			tag.position = Vector3(x, 0.84, 0.9)
 			tag.rotation.y = PI
 			m.floor_root.add_child(tag)
-	# 主位:许文远(立姿假人,西装色)
-	var xu := Props.banquet_dummy(m, 0, -3.2, 0.0, "1e2430")
+	# 主位:许文远(立姿假人,西装色,面朝长桌;身后主位椅)
+	Props.chair(m, 0, -3.2, 0.0)
+	Props.banquet_dummy(m, 0, -3.2, PI, "1e2430", true, true)
 	m.colliders.append(Rect2(-0.25, -3.5, 0.5, 0.6))
-	m.add_light(Color.html("e8c8a0"), 0.4, 4.5, 0, 2.2, -3.2, 0.1)
+	m.add_light(Color.html("e8c8a0"), 0.4, 4.5, 0, 2.2, -3.2, 0.1, false)
 	# 席位谜题
 	var solve_seat := func() -> void:
 		m.G.flags["seat10F"] = true
@@ -67,11 +70,11 @@ static func build(m) -> void:
 				var tw := d.create_tween()
 				tw.tween_property(d, "rotation:x", -0.35, 1.4)
 		m.H.show_msg("满桌假人同时向你低头。灯,一盏一盏暖了起来——\n宴会厅变成了婚礼现场,只差一步。", 6.0)
-		m.get_tree().create_timer(4.4).timeout.connect(func() -> void:
+		m.after(4.4, func() -> void:
 			m.gain_relic("烫金请柬")
 			m.change_sanity(2.0)
 			m.H.show_msg("主位的司仪眼眶发红:\"就差这一桌,我的婚礼……就差这一桌。\"\n\"她也在火里。我们没办成的,是两个人的一辈子。\"\n他双手把一张烫金请柬推到你面前。理智 +2", 7.2))
-		m.get_tree().create_timer(9.0).timeout.connect(func(): m.gain_card("11F"))
+		m.after(9.0, func(): m.gain_card("11F"))
 		m.H.set_objective("权限卡11F到手。乘电梯前往 11F 祭坛")
 	var seat_cb := func() -> void:
 		if m.G.flags.get("seat10F", false):
@@ -90,7 +93,7 @@ static func build(m) -> void:
 					m.H.red_flash()
 					m.S.sting()
 					m.shake = 2.0
-					m.H.show_msg("你刚碰到主位的椅背,司仪的手就按了上来——冰得像铁。\n\"这个位置,不是给活人留的。\"理智 −15", 5.6)},
+					m.H.show_msg("你刚碰到主位的椅背,司仪的手就按了上来——冰得像铁。\n\"这个位置,不是给活人留的。\"理智 −%d" % int(m.G.NUM["violation"]), 5.6)},
 				{"text": "挤到假人旁边坐下", "fn": func() -> void:
 					m.close_modal()
 					m.change_sanity(-m.G.NUM["violation"])
@@ -99,7 +102,7 @@ static func build(m) -> void:
 					for d: Node3D in dummies:
 						if is_instance_valid(d):
 							d.look_at(Vector3(m.player_pos.x, d.position.y, m.player_pos.z))
-					m.H.show_msg("满桌假人齐刷刷转头,胸牌哗啦作响。\n旁边的\"宾客\"凑近你,腐臭的呼吸擦过耳边。理智 −15", 5.6)},
+					m.H.show_msg("满桌假人齐刷刷转头,胸牌哗啦作响。\n旁边的\"宾客\"凑近你,腐臭的呼吸擦过耳边。理智 −%d" % int(m.G.NUM["violation"]), 5.6)},
 			],
 		})
 	m.add_inter(Vector3(float(seat_x[empty_side_idx]), 1.0, 1.3), "没有胸牌的空位", seat_cb, 2.0)
