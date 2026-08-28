@@ -54,12 +54,14 @@ static func build(m) -> void:
 	m.add_inter(Vector3(3.5, 0.4, 3.3), "矮柜后的电池", bat_cb, 2.0, bat_cond)
 	# 苏梅(老师):围裙 + 发髻 + 锥裙,沿固定路线巡视走廊
 	var fig := Props.human_figure(m, {
-		"pose": "stand", "scale": 0.94, "hair": "bun", "skirt": true, "apron": true,
+		"pose": "stand", "scale": 0.94, "hair": "bun", "skirt": true, "apron": true, "alpha": 0.88, "fabric": "cloth_cotton",
 		"top_hex": "4a6a72", "bottom_hex": "3a545c", "skin_hex": "c8b49a", "hair_hex": "2c262c",
 	})
 	var su: Node3D = fig["root"]
 	su.position = Vector3(0, 0, 4.0)
 	m.floor_root.add_child(su)
+	# 锥裙遮腿(无下肢枢轴)→ 驱动只做躯干起伏/摆动 + 手臂反相;步长按裙摆视觉收紧
+	HumanoidAnim.register(fig, {"stride": 0.55})
 	var state := {"wp": 0, "caught_cd": 0.0, "giggle_t": 6.0}
 	var wps: Array = [Vector3(0, 0, 4.0), Vector3(-6, 0, 1.0), Vector3(0, 0, -1.5), Vector3(6, 0, 1.0)]
 	# 拼图谜题(右教室桌面)
@@ -128,7 +130,6 @@ static func build(m) -> void:
 		else:
 			su.position += dir.normalized() * 1.1 * dt
 			su.look_at(Vector3(wp.x, su.position.y, wp.z))
-			su.position.y = abs(sin(Time.get_ticks_msec() * 0.008)) * 0.028
 		state["caught_cd"] = maxf(0.0, state["caught_cd"] - dt)
 		var to_p: Vector3 = m.player_pos - su.position
 		to_p.y = 0.0

@@ -12,7 +12,7 @@
 ## Demo 技术约束(game/)
 
 - 引擎:Godot 4.7(Forward+ / D3D12)。本机编辑器可执行文件:`C:\Users\PC\Desktop\Godot_v4.7.2-stable_win64.exe`。
-- **素材**:贴图、法线贴图程序化生成(`scripts/texgen.gd`);**音效为外部 CC0/CC-BY 资源**(`game/sounds/`,来源与授权见 `game/sounds/CREDITS.md`,资源缺失时 `scripts/sfx.gd` 自动回退程序化合成);中文界面从系统字体加载(微软雅黑,缺失时回退默认字体)。导出正式版时需随包附带字体文件。
+- **素材**:基础贴图与**全部法线**程序化生成(`scripts/texgen.gd`);**布料/皮革 albedo 为外部 CC0 扫描**(`game/textures/`,来源与授权见 `game/textures/CREDITS.md`,缺失时 `TexGen.load_external()` 跳过该槽位、消费方自动回退程序化贴图);皮肤与头发一律程序化(可达的 CC0 站无人体扫描,仅留 `skin_fuzz`/`hair_card`/`eye_hetero` 键位)。外部贴图**只收 albedo**——Godot 导入的 JPG 默认按 sRGB 采样,法线需关 sRGB 才正确。中文界面从系统字体加载(微软雅黑,缺失时回退默认字体)。导出正式版时需随包附带字体文件。
 - 渲染:StandardMaterial3D PBR(roughness/metallic/clearcoat/程序化法线)+ 深色程序化天空作环境反射 + 阴影(PCF Soft)+ Environment 泛光/ACES 色调映射;低理智画面扭曲、色差与暗角由 `hud.gd` 的全屏后处理着色器完成。
 - 结构:全部玩法逻辑为 GDScript——`scripts/main.gd` 总控(玩家/交互/电梯与六种异常/理智结算/结局死亡),`scripts/floor_*.gd` 为五个楼层,`scripts/hud.gd` 为全部 UI。唯一场景 `scenes/main.tscn` 只挂根脚本,内容均由代码搭建。
 - 数值(理智/电量/体力/时钟/违规惩罚)以 `06-玩法机制/数值平衡表.md` 为准,改动需两处对齐(`scripts/state.gd` 的 `NUM`)。
@@ -31,7 +31,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File game/qa/brightgrid.ps1 game/
 powershell -NoProfile -ExecutionPolicy Bypass -File game/qa/uicheck.ps1                                    # 像素级 UI 特征断言(标题朱砂行/CRT 扫描线/弹窗纸纹/死亡红带/结局亮像素)
 ```
 
-改动 game/ 后必须跑无头走查,确认输出「失败项: 无 —— 全部通过 ✓」且零 `SCRIPT ERROR`。改动/新增 `game/sounds/` 下音频后须先跑 `--import` 再跑 QA(QA 收尾断言外部音效加载数)。
+改动 game/ 后必须跑无头走查,确认输出「失败项: 无 —— 全部通过 ✓」且零 `SCRIPT ERROR`。改动/新增 `game/sounds/` 下音频或 `game/textures/` 下贴图后须先跑 `--import` 再跑 QA(QA 收尾断言外部音效加载数,第 29 节断言外部贴图与建模量)。
+
+⚠️ 陷阱:`qa_runner.gd` 的 `_run()` 内一旦出现 SCRIPT ERROR,协程中断且永远走不到末尾的 `quit(0)`,**Godot 进程会静默滞留**(表现为"QA 跑了半小时没完"),判断依据是日志里缺少「失败项:」行;此时需手动结束进程,且注意 `TaskStop` 只终止外层 shell,Godot 子进程要另行 `Stop-Process`。另:headless `--script` 中调用 `PrimitiveMesh.get_surface_arrays()`(CylinderMesh/SphereMesh/BoxMesh)会挂死进程,取网格真值只能走自家 `ArrayMesh` 生成器。
 
 ## Demo 内部接口(QA 脚本依赖,勿随意改名)
 
@@ -39,6 +41,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File game/qa/uicheck.ps1         
 - 音效(`S` = `Sfx`):`play_buf(name, vol, pitch)`、`ding/click/flash/sting/whisper/thud/mahjong()`、`play_step(running)`、`heart(on, rate_ms)`、`drone(on)`、`elevator_ride(on)`、`music_box()`、`toggle_mute()`、`ext_loaded`(QA 断言用)
 - 主控(`main.gd`,场景根节点名 `Main`):`player_pos / player_yaw / player_pitch / keys`(按键字典,键为 `Key` 枚举)、`current_inter`、`ride_to(floor, skip_anomaly)`、`tp(idx)`、`teleport_cycle()`、`change_sanity(v)`、`add_game_minutes(m)`、`start_ending()`、`interact_press()`
 - HUD(`H`):弹窗判定用 `H.modal_visible()` 与 `H.modal_title.text`;选项点击用 `H.find_choice(文本[, 前缀匹配])` 返回 Button,以 `pressed.emit()` 触发。
+- 人形建模:`Props.human_figure(m, cfg)` → `Humanoid.build(m, cfg)`,约定正面朝 -Z。cfg 键见 `props.gd` 注释(含 `face:"blurred"`、`alpha`、`fabric`)。返回**旧 8 键不变** `{root,head,arm_l/r,fore_l/r,hand_l/r}` + 骨架键 `{upper, hip_l/r, knee_l/r, ankle_l/r, legged, rig{scale,pose,stride,heel}}`;`skirt` / `robe` 坐姿 / `legless` 三种分支**不建腿**,对应枢轴为 `null`,驱动须先判 `legged`。
+- 步态驱动:`HumanoidAnim`(静态注册表)—— `register(fig, opts)`、`tick_all(dt)`(仅 `main._process` 在 `floor_update` 之后调用)、`unregister_floor()`(`clear_scene` 必须调)、`breath_root(node, amp, hz, phase)`、`pulse_scale`、`last_slip`(QA 断言用)。**驱动只写 `upper` 与四肢枢轴,绝不写 root 的 position/rotation**(root 归楼层与 `look_at`)。参数集中在 `HumanoidAnim.GA`(渲染/动作常量,不进 `state.NUM`)。
+- 静态合批:`Humanoid.merge_static(fig_root, cache_key)` 必须在摆好姿势之后调用,合并后骨架引用失效;cache_key 须含全部外观因子,楼层隔离用 `m.get_instance_id()`。缓存有 `MERGE_CACHE_MAX` 上限(LRU),`merge_cache_stats()` 供 QA 断言。
+- QA 第 29 节依赖上述名字与 `Humanoid` 的生成器函数(`lathe/sculpt_sphere/tube/merge_static/flat_quad`),勿改名。
 
 ## 改文档前先读
 

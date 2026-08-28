@@ -166,7 +166,11 @@ var flash: SpotLight3D
 var body_glow: OmniLight3D
 var viewmodel: Node3D            # 第一人称右手(手持手电)
 var vm_lens: StandardMaterial3D  # 手电透镜(开关同步发光)
+var vm_fingers: Array = []       # 视图模型 4 个指根枢轴(屈指)
+var vm_thumb: Node3D = null      # 视图模型拇指枢轴
 var _vm_t := 0.0                # 摆动相位
+var player_cadence := 0.0       # 实际步频(步/秒),由位移速度导出;手持物与脚步声共用
+const PLAYER_STRIDE_SOUND := 1.45   # 虚拟步长(m):2.8m/s ÷ 1.45 ≈ 1.92 步/秒,即旧版 0.52s/步的节奏
 var _vm_sway := Vector2.ZERO    # 转向惯性
 var _vm_dip := 0.0              # 开关手电抬落脉冲
 var _vm_flash_prev := false
@@ -186,6 +190,21 @@ var fake_exit_obj: MeshInstance3D = null
 var current_inter = null
 var _prompt_label := ""            # 交互目标标签缓存:变化才拼 "[E] …" 字符串
 var _shadow_mat: StandardMaterial3D  # 低理智影子剪影共用材质(无状态差异,建一次复用)
+var _shadow_fig_mesh: ArrayMesh = null   # 影子人形的共享合并网格(惰性构建一次)
+
+## 体积化黑影网格:一具 silhouette 人形 → merge_static 收成单 surface,之后每次显形仅 1 个实例
+func _shadow_figure_mesh() -> ArrayMesh:
+	if _shadow_fig_mesh != null:
+		return _shadow_fig_mesh
+	var fig := Props.human_figure(self, {"pose": "stand", "face": "none", "hair": "bald",
+		"silhouette": true, "sil_alpha": 0.85})
+	var body: Node3D = fig["root"]
+	Humanoid.merge_static(body, "shadowfig:v1")   # 剪影材质与楼层无关 → 键不含 instance_id
+	var mis: Array = body.find_children("*", "MeshInstance3D", true, false)
+	if not mis.is_empty():
+		_shadow_fig_mesh = mis[0].mesh   # ArrayMesh 是资源,被引用即随材质存活
+	body.free()
+	return _shadow_fig_mesh
 
 # 玩家(QA 直接访问)
 var player_pos := Vector3(0, 0, 6.2)
@@ -244,6 +263,8 @@ func _build_camera() -> void:
 	var vm := Humanoid.build_viewmodel(self)
 	viewmodel = vm["root"]
 	vm_lens = vm["lens"]
+	vm_fingers = vm["fingers"]
+	vm_thumb = vm["thumb"]
 	viewmodel.position = Vector3(0.24, -0.26, -0.42)
 	viewmodel.rotation = Vector3(0.04, -0.06, 0.0)
 	viewmodel.visible = false
@@ -274,6 +295,8 @@ func _process(delta: float) -> void:
 			update_atmosphere(dt)
 			if floor_update.is_valid():
 				floor_update.call(dt)
+			# 步态/姿态驱动:必须在楼层逻辑之后叠加(楼层已更新 NPC root 位移与 look_at)
+			HumanoidAnim.tick_all(dt)
 			var now := Time.get_ticks_msec()
 			for L: Dictionary in flicker_lights:
 				var n := sin(now * 0.013 + (L["l"] as Node3D).position.x * 7.0) * sin(now * 0.007)
@@ -301,15 +324,24 @@ func _update_viewmodel(dt: float) -> void:
 		_vm_flash_prev = G.flash_on
 		_vm_dip = 1.0
 	_vm_dip = maxf(0.0, _vm_dip - dt * 6.0)
+	# 屈指:按开关的瞬间握紧(与整体抬落共用 _vm_dip 相位),点亮后保持略紧握持
+	var curl := sin(_vm_dip * PI) * 0.42 + (0.06 if G.flash_on else 0.0)
+	for i in vm_fingers.size():
+		var f: Node3D = vm_fingers[i]
+		if f != null and is_instance_valid(f):
+			f.rotation.x = curl * (1.0 - 0.12 * float(i))   # 食指/中指更明显
+	if vm_thumb != null and is_instance_valid(vm_thumb):
+		vm_thumb.rotation.x = curl * 0.5
 
 func _update_viewmodel_motion(dt: float, moving: bool, running: bool, crouching: bool) -> void:
 	if viewmodel == null or not viewmodel.visible:
 		return
-	var bob_speed := 2.0
-	if moving:
-		bob_speed = 11.0 if running else 7.5
+	# 摆动锁相:一个 bob 周期 = 两步(旧版写死 7.5/11.0 与脚步声脱拍)
+	var bob_speed := 2.0 if player_cadence <= 0.05 else player_cadence * PI
 	_vm_t += dt * bob_speed
-	var amp := 0.012 if moving else 0.004
+	var amp := 0.004
+	if moving:
+		amp = 0.018 if running else 0.012
 	# 转向惯性:视角角速度反向缓动
 	var dy := player_yaw - _vm_prev_yaw
 	var dp := player_pitch - _vm_prev_pitch
@@ -398,6 +430,7 @@ func update_player(dt: float) -> void:
 		G.stamina = minf(100.0, G.stamina + G.NUM["staminaRegen"] * dt)
 		if G.stamina_lock and G.stamina >= 20.0:
 			G.stamina_lock = false
+	player_cadence = 0.0
 	if moving:
 		var l := float(Vector2(mx, mz).length())
 		var speed_mult := 0.45 if crouching else 1.0
@@ -407,11 +440,12 @@ func update_player(dt: float) -> void:
 		var dx: float = (c * mx + s * mz) / l * sp
 		var dz: float = (c * mz - s * mx) / l * sp
 		try_move(dx, dz)
-		_step_acc += dt
-		var step_len := (0.6 if crouching else (0.34 if running else 0.52))
-		if _step_acc >= step_len:
-			_step_acc = 0.0
+		# 按位移计步(旧写法累加秒却与距离样常量比较 → 走/跑同频,与速度脱钩)
+		_step_acc += sp
+		if _step_acc >= PLAYER_STRIDE_SOUND:
+			_step_acc -= PLAYER_STRIDE_SOUND
 			S.play_step(running and not crouching)
+		player_cadence = sp / dt / PLAYER_STRIDE_SOUND
 	G.running = running and moving
 	var shake_y := 0.0
 	var roll := 0.0
@@ -643,17 +677,18 @@ func update_atmosphere(dt: float) -> void:
 			var p := player_pos + cam_forward() * 4.5
 			p.x += (randf() - 0.5) * 3.0
 			var m := MeshInstance3D.new()
-			var qm := QuadMesh.new()
-			qm.size = Vector2(0.9, 2.2)
-			m.mesh = qm
-			m.material_override = _shadow_mat
-			m.position = Vector3(p.x, 1.1, p.z)
+			# 体积化人形(旧版 QuadMesh 薄片在点光下明显是"一张纸");单网格复用,每次显形仅 1 个实例
+			m.mesh = _shadow_figure_mesh()
+			m.material_override = _shadow_mat   # 实例级覆盖合并网格内的 surface 材质
+			m.position = Vector3(p.x, 0.0, p.z)
+			m.scale = Vector3.ONE * 0.62
 			floor_root.add_child(m)
-			m.look_at(Vector3(camera.global_position.x, 1.1, camera.global_position.z))
+			m.look_at(Vector3(camera.global_position.x, 0.0, camera.global_position.z))
 			var life := 0.9 + randf() * 0.6
 			# 清理回调绑在影子自身的 tween 上:影子被楼层切换释放时 tween 一并失效,
 			# 不会像 SceneTree 计时器那样回调已释放实例并打印 "Lambda capture was freed"。
 			var fade_tw := m.create_tween()
+			fade_tw.tween_property(m, "scale", Vector3.ONE, 0.35).set_trans(Tween.TRANS_SINE)   # 黑暗凝聚成形
 			fade_tw.tween_interval(life)
 			fade_tw.tween_callback(func() -> void: m.free())
 			S.scratch()   # 影子实体化:金属刮擦(音效指南威胁预警音);thud 留给门/重物
@@ -868,6 +903,20 @@ func _pmat_build(o: Dictionary) -> StandardMaterial3D:
 		m.emission_texture = o["emission_tex"]
 		m.emission_energy_multiplier = o.get("emission_energy", 1.0)
 		m.emission = Color(1, 1, 1)
+	if o.get("subsurf", 0.0) > 0.0:
+		# Godot 4.7 的次表面散射属性名为 subsurf_scatter_*(无 sss_* 命名)
+		m.subsurf_scatter_enabled = true
+		m.subsurf_scatter_strength = o["subsurf"]
+		if o.get("subsurf_skin", false):
+			m.subsurf_scatter_skin_mode = true
+		if o.has("subsurf_trans"):
+			m.subsurf_scatter_transmittance_enabled = true
+			m.subsurf_scatter_transmittance_color = o["subsurf_trans"]
+	if o.get("rim", 0.0) > 0.0:
+		m.rim_enabled = true
+		m.rim_tint = o["rim"]
+	if o.get("vc_albedo", false):
+		m.vertex_color_use_as_albedo = true
 	if o.has("uv1"):
 		m.uv1_scale = o["uv1"]
 	if o.get("unshaded", false):
@@ -1031,6 +1080,7 @@ func clear_scene() -> void:
 	dyn_lights = {}
 	safe_spots = []
 	floor_update = Callable()
+	HumanoidAnim.unregister_floor()   # floor_root 是立即 free() 的,注册表必须同步清空
 	fake_exit_obj = null
 	elevator_doors = {}
 

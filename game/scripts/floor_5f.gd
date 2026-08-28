@@ -90,7 +90,7 @@ static func build(m) -> void:
 	Props.chair(m, -8.3, -6.2, 0.6 + PI)
 	# 阿杰的尸体:瘫坐椅上,垂头歪颈,凹眼张嘴(偶尔"转头")
 	var fig := Props.human_figure(m, {
-		"pose": "slump", "hair": "short", "face": "hollow", "polo": true,
+		"pose": "slump", "hair": "short", "face": "hollow", "polo": true, "fabric": "cloth_cotton",
 		"top_hex": "32404a", "bottom_hex": "26303a", "skin_hex": "9a8874", "hair_hex": "26221e",
 	})
 	var jay: Node3D = fig["root"]

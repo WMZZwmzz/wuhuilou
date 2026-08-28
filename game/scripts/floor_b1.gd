@@ -48,7 +48,7 @@ static func build(m) -> void:
 	m.add_light(Color.html("c8a86a"), 0.35, 4.0, 8.6, 2.2, 4.8, 0.1, false)
 	# 老周:保安服 + 保安帽 + 腰带 + 大串钥匙;全部件不投影(无影子)
 	var fig := Props.human_figure(m, {
-		"pose": "stand", "scale": 1.03, "face": "human", "no_shadow": true, "uniform": true,
+		"pose": "stand", "scale": 1.03, "face": "blurred", "no_shadow": true, "uniform": true, "fabric": "cloth_denim",
 		"cap_hex": "1e2430",
 		"top_hex": "2c3444", "bottom_hex": "222a38", "skin_hex": "8a7a62", "hair_hex": "3a342c",
 	})
@@ -75,6 +75,9 @@ static func build(m) -> void:
 	zhou.add_child(keys)
 	zhou.position = Vector3(0, 0, 5.0)
 	m.floor_root.add_child(zhou)
+	# 步态驱动:巡逻 1.5m/s 走步态,追击 4.5m/s 由实测位移速度自动进跑步档
+	HumanoidAnim.register(fig, {"step_cb": func(running: bool) -> void:
+		m.S.play_at("footstep", zhou.global_position + Vector3(0, 1.0, 0), 0.5 if running else 0.34)})
 	var state := {
 		"mode": "patrol", "wp": 0, "invest_t": 0.0, "lost_t": 0.0,
 		"jingle_t": 0.0, "light_t": 4.0, "caught_msg": 0,

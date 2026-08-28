@@ -21,7 +21,7 @@ static func build(m) -> void:
 	# 陈守财:背对入口(-Z 方向坐,面朝北),玩家从南侧电梯来看到的是背影
 	# 参数化人形:老年驼背 + 长衫 + 无脸白板(平时藏在脑后,转头后正对玩家)
 	var fig := Props.human_figure(m, {
-		"pose": "sit", "hunch": 0.55, "robe": true,
+		"pose": "sit", "hunch": 0.55, "robe": true, "fabric": "cloth_satin",
 		"face": "blank", "hair": "short",
 		"top_hex": "2e3440", "skin_hex": "8a7a62", "hair_hex": "3a342c",
 	})

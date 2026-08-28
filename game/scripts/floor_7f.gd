@@ -1,6 +1,9 @@
 extends RefCounted
 ## 7F 灵堂
 
+# 纸人薄体积厚度:侧面掠射角下避免只剩一条刃边而"消失"
+const PM_THICKNESS := 0.012
+
 static func build(m) -> void:
 	m.setup_env(0.12, Color.html("30201c"), Color.html("0e0605"), 0.05)
 	FloorCommon.room_shell(m, 20.0, 16.0)
@@ -35,7 +38,7 @@ static func build(m) -> void:
 			"choices": [{"text": "默记于心", "fn": func() -> void: m.close_modal()}],
 		})
 	m.add_inter(Vector3(-3.4, 1.6, -7.5), "讣告", obit_cb, 2.2)
-	# 纸人 ×3(剪影人形薄片 + 脸谱贴片,双面半透明,不投影)
+	# 纸人 ×3(剪影人形前后双片成薄体积 + 脸谱贴片,双面半透明,不投影)
 	var pms: Array = []
 	var pm_mat: StandardMaterial3D = m.tex_mat("papergrain", "dcd6c4", {"roughness": 0.85, "transparent": true, "double_sided": true,
 		"no_cache": true})   # 随后改 albedo_color;纸人材质不能与其他纸面共享
@@ -45,16 +48,21 @@ static func build(m) -> void:
 	var sheet := Humanoid.paper_man_mesh()
 	for p: Array in [[-4.5, -2], [4.5, -2], [-3, 4.5]]:
 		var pm := Node3D.new()
-		var body := MeshInstance3D.new()
-		body.mesh = sheet
-		body.material_override = pm_mat
-		body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		pm.add_child(body)
-		# 脸谱贴片(正面 -Z,随 look_at 朝向玩家)
+		# 前后两张同网格薄片对置成体:侧看是窄腹而非纯刃边;
+		# 单面网格靠反向 rotation.y 互补可见,两片都写 0/PI 会因背面剔除丢一侧。
+		for side: Array in [[1, 0.0], [-1, PI]]:
+			var panel := MeshInstance3D.new()
+			panel.mesh = sheet
+			panel.material_override = pm_mat
+			panel.rotation.y = float(side[1])
+			panel.position.z = PM_THICKNESS * 0.5 * float(side[0])
+			panel.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			pm.add_child(panel)
+		# 脸谱贴片:薄片正面(网格法线/绕序均朝 -Z)经 look_at 后正对玩家,故仍贴 -Z 外侧
 		var face := MeshInstance3D.new()
 		face.mesh = Humanoid.flat_quad(0.3, 0.3)
 		face.material_override = face_mat
-		face.position = Vector3(0, 0.75, -0.012)
+		face.position = Vector3(0, 0.75, -PM_THICKNESS * 0.5 - 0.006)
 		face.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		pm.add_child(face)
 		pm.position = Vector3(p[0], 1.0, p[1])

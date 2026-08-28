@@ -1,6 +1,15 @@
 extends RefCounted
 ## B2 锅炉房("母亲"核心,四结局)
 
+# 核心/浮现脸演出参数:振幅与频率分列,便于统一调手感
+const CORE_PULSE_BASE := 0.96      # 核心静息缩放
+const CORE_PULSE_AMP := 0.06       # 核心缩放随呼吸相位 p 摆动的幅度(p 同时驱动灯焰)
+const CORE_PULSE_HZ := 2.2         # 核心搏动角频率(rad/s)
+const FACE_PERIOD := TAU / 0.35    # 单张浮现脸隆起→陷没周期(秒)
+const FACE_STAGGER := 1.9          # 相邻脸的相位错开量(弧度)
+const FACE_SCALE_MIN := 0.15       # 浮脸纵向压扁下限(防零缩放矩阵告警)
+const FACE_SHOW_AT := 0.12         # 相位正弦高于此值才可见
+
 static func build(m) -> void:
 	m.setup_env(0.1, Color.html("381a18"), Color.html("160608"), 0.07)
 	FloorCommon.room_shell(m, 20.0, 16.0)
@@ -204,21 +213,26 @@ static func build(m) -> void:
 			m.H.show_msg("肉壁上嵌着一把老式的锁孔,像一扇门被活活长死在墙里。", 4.2), 1.8)
 	# 楼层逻辑:核心脉动 + 浮脸隆起/陷没 + 低鸣 + 心跳声压
 	var state := {"pulse": 0.0, "face_t": 0.0}
-	m.floor_update = func(dt: float) -> void:
-		state["pulse"] = state["pulse"] + dt
-		state["face_t"] = state["face_t"] + dt
-		var p: float = 0.75 + 0.35 * sin(state["pulse"] * 2.2)
+	# 演出收敛为两个局部函数:呼吸相位 p 同时驱动灯焰与核心缩放,浮脸按各自相位起伏
+	var _pulse_core := func(p: float) -> void:
 		if is_instance_valid(core_light):
 			core_light.light_energy = 1.8 * p
 		if is_instance_valid(core):
-			core.scale = Vector3.ONE * (0.96 + 0.06 * p)
-			for i in faces.size():
-				var fh: Node3D = faces[i]
-				if not is_instance_valid(fh):
-					continue
-				var ph: float = sin(state["face_t"] * 0.35 + i * 1.9)
-				fh.scale = Vector3(1.0, maxf(0.15, ph), 1.0)
-				fh.visible = ph > 0.12
+			core.scale = Vector3.ONE * (CORE_PULSE_BASE + CORE_PULSE_AMP * p)
+	var _swell_face := func(fh: Node3D, ph: float) -> void:
+		fh.scale = Vector3(1.0, maxf(FACE_SCALE_MIN, ph), 1.0)
+		fh.visible = ph > FACE_SHOW_AT
+	m.floor_update = func(dt: float) -> void:
+		state["pulse"] = state["pulse"] + dt
+		state["face_t"] = state["face_t"] + dt
+		_pulse_core.call(0.75 + 0.35 * sin(state["pulse"] * CORE_PULSE_HZ))
+		if not is_instance_valid(core):
+			return
+		for i in faces.size():
+			var fh: Node3D = faces[i]
+			if not is_instance_valid(fh):
+				continue
+			_swell_face.call(fh, sin(fmod(state["face_t"], FACE_PERIOD) / FACE_PERIOD * TAU + i * FACE_STAGGER))
 	m.tp_list([
 		{"x": 0.0, "z": -3.4, "yaw": 0.0},
 		{"x": 0.0, "z": -6.4, "yaw": 0.0},

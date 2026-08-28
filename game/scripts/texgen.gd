@@ -2,11 +2,29 @@ class_name TexGen
 extends RefCounted
 ## 程序化贴图:大面积表面(墙/地/顶)由 GPU 噪声着色器渲染(SubViewport),小面(门/金属)与
 ## 法线退回 CPU 噪声画布(Image 逐像素 + Sobel);文本/图形贴图走 SubViewport 绘制。
-## 中文字体从系统加载(微软雅黑);零外部素材,headless 下 GPU/文本贴图退回纯色。
+## 中文字体从系统加载(微软雅黑);headless 下 GPU/文本贴图退回纯色。
+## 布料/皮革 albedo 优先用 textures/ 下的外部 CC0 扫描(见 EXT),缺失时自动回退上面的
+## 程序化版本——删除 textures/ 目录游戏仍可运行,与 sfx.gd 的外部音效范式一致。
 
 var font: FontFile
 var tex := {}            # 名称 -> ImageTexture(共享;uv 平铺靠材质 uv1_scale)
 var _headless := false
+
+## 外部贴图清单:键 -> 路径。仅收录 albedo;法线一律程序化(见 textures/CREDITS.md:
+## Godot 导入的 JPG 默认按 sRGB 采样,法线需关 sRGB 才正确,而 .import 由 --import 生成
+## 不便手写)。人体皮肤/毛发在可达的 CC0 站上无扫描资源,故 skin_* 仍为程序化基底,
+## 下面三个人体槽只留键位、暂无文件,缺失时 has() 返回 false 由消费方走回退。
+const EXT := {
+	"cloth_cotton": "res://textures/cloth_cotton.jpg",   # 棉针织:病号服/衬衫/纸衣
+	"cloth_denim": "res://textures/cloth_denim.jpg",     # 丹宁:工装/外套
+	"cloth_satin": "res://textures/cloth_satin.jpg",     # 素绉缎:寿衣/窗帘/礼服
+	"leather_brown": "res://textures/leather_brown.jpg", # 棕皮革:皮箱/皮鞋/座椅
+	"skin_fuzz": "res://textures/skin_fuzz.jpg",         # 预留:皮肤绒毛/次表面细节
+	"hair_card": "res://textures/hair_card.jpg",         # 预留:发丝卡片
+	"eye_hetero": "res://textures/eye_hetero.jpg",       # 预留:虹膜/异瞳
+}
+
+var ext_loaded := 0      # 外部贴图成功加载的键数(QA 断言用)
 
 func _init() -> void:
 	_headless = (DisplayServer.get_name() == "headless")
@@ -347,6 +365,20 @@ func draw_text_line(c: Control, s: String, x: float, y: float, size: int, col: C
 		c.draw_string_outline(f, Vector2(x, y), s, HORIZONTAL_ALIGNMENT_LEFT, -1, size, 4, Color(0, 0, 0, 0.4))
 	c.draw_string(f, Vector2(x, y), s, HORIZONTAL_ALIGNMENT_LEFT, -1, size, col)
 
+# ---------- 外部贴图通道 ----------
+# 缺失即不写键:has() 返回 false,消费方沿用程序化贴图;有文件则直接顶替同名槽位。
+
+func load_external() -> void:
+	for key: String in EXT:
+		var p: String = EXT[key]
+		if not ResourceLoader.exists(p):
+			continue
+		var t := load(p)
+		if t == null:
+			continue
+		tex[key] = t
+		ext_loaded += 1
+
 # ---------- 全部贴图一次性生成 ----------
 # 两阶段批处理(A1/B1):所有需 GPU/绘制的 SubViewport 先一次挂树,
 # 统一 await 两个 frame_post_draw 后逐个取图——替代原来每张贴图串行各等两帧。
@@ -354,6 +386,9 @@ func draw_text_line(c: Control, s: String, x: float, y: float, size: int, col: C
 # 与 GPU 类贴图的既有语义一致。
 
 func prepare() -> void:
+	# 外部贴图必须排在 _headless 短路之前:headless 下 GPU/文本贴图没有意义,
+	# 但外部 albedo 只是 load 现成资源,无头也要计入 ext_loaded(QA 断言用)。
+	load_external()
 	if _headless:
 		return
 	var vps: Dictionary = {}   # tex 名 -> SubViewport(已挂树待渲染)

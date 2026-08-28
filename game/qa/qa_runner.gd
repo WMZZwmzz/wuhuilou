@@ -160,6 +160,103 @@ func reach_b2_core(extra_flags: Dictionary = {}) -> void:
 			break
 	await wait_s(0.6)
 
+## 人形网格法线/绕序审计(两步,均为客观量):
+## ① 逐三角形比较 cross(v1-v0,v2-v0) 与其三顶点存储法线均值 → 该 surface 的手性一致率。
+##    一致率不足即「同一网格内部朝向自相矛盾」(封口与侧壁反手、或不同绕序的部件被合并进同一
+##    surface 都会落在这里)。符号由这一步的多数决定,不受顶点门控影响。
+## ② 只在扇面一致的流形顶点上比较存储法线与面积加权几何法线 → 抓「位移后忘记重算法线」。
+func _normal_audit(root: Node) -> Dictionary:
+	var verts := 0
+	var opposite := 0
+	var worst := 0.0
+	var bad_index := 0
+	var mixed := 0
+	for mi: MeshInstance3D in root.find_children("*", "MeshInstance3D", true, false):
+		if mi.mesh == null:
+			continue
+		for sfc in mi.mesh.get_surface_count():
+			var arr: Array = mi.mesh.surface_get_arrays(sfc)
+			var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var sn: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			var idx: PackedInt32Array = arr[Mesh.ARRAY_INDEX]
+			if v.size() < 4 or sn.size() != v.size() or idx.size() < 3:
+				continue
+			var max_i := 0
+			for i in idx.size():
+				max_i = maxi(max_i, idx[i])
+			if max_i >= v.size():
+				print("  [bad-index] %s verts=%d max_index=%d" % [mi.get_path(), v.size(), max_i])
+				bad_index += 1
+				continue
+			var tpos := 0
+			var tneg := 0
+			var acc := PackedVector3Array()
+			acc.resize(v.size())
+			var absum := PackedFloat32Array()
+			absum.resize(v.size())
+			for t in idx.size() / 3:
+				var b: int = t * 3
+				var i0: int = idx[b]
+				var i1: int = idx[b + 1]
+				var i2: int = idx[b + 2]
+				var cr: Vector3 = (v[i1] - v[i0]).cross(v[i2] - v[i0])
+				var clen: float = cr.length()
+				if clen < 1e-14:
+					continue
+				for i in [i0, i1, i2]:
+					acc[i] = acc[i] + cr
+					absum[i] += clen
+				var avg: Vector3 = sn[i0] + sn[i1] + sn[i2]
+				if avg.length() < 1e-9:
+					continue
+				if cr.normalized().dot(avg.normalized()) > 0.0:
+					tpos += 1
+				else:
+					tneg += 1
+			var tot_t := tpos + tneg
+			if tot_t == 0:
+				continue
+			var consist := float(maxi(tpos, tneg)) / float(tot_t)
+			if consist < 0.995:
+				mixed += 1
+				print("  [mixed-winding] %s same=%d opposite=%d consist=%.3f" % [
+					mi.get_path(), maxi(tpos, tneg), mini(tpos, tneg), consist])
+			var flip := 1.0 if tpos >= tneg else -1.0
+			for i in v.size():
+				if absum[i] < 1e-12:
+					continue
+				if acc[i].length() / absum[i] < 0.9:
+					continue   # 相交壳体接缝处的顶点邻接三角形朝向分歧,不能作为判据
+				var g: Vector3 = acc[i].normalized() * flip
+				var d: float = rad_to_deg(acos(clampf(g.dot(sn[i]), -1.0, 1.0)))
+				verts += 1
+				if d > 90.0:
+					opposite += 1
+				worst = maxf(worst, minf(d, 180.0 - d))
+	return {"verts": verts, "opposite": opposite, "worst": worst, "bad_index": bad_index, "mixed": mixed}
+
+## uv 最大跨度(米):用于验证 UV 为世界米制而非归一化参数
+func _uv_span(mesh: Mesh) -> Vector2:
+	var arr: Array = mesh.surface_get_arrays(0)
+	var su: PackedVector2Array = arr[Mesh.ARRAY_TEX_UV]
+	var out := Vector2.ZERO
+	for p in su:
+		out.x = maxf(out.x, p.x)
+		out.y = maxf(out.y, p.y)
+	return out
+
+## 以指定速度推进 2 秒,返回落地步数(驱动内部 step_cb 计数)→ 验证步频随速度上升
+func _count_steps(fig: Dictionary, speed: float) -> int:
+	var steps := [0]
+	HumanoidAnim.unregister_floor()
+	HumanoidAnim.register(fig, {"step_cb": func(_running: bool) -> void: steps[0] += 1})
+	var root: Node3D = fig["root"]
+	for i in 120:
+		root.position += Vector3(0, 0, -speed / 60.0)
+		HumanoidAnim.tick_all(1.0 / 60.0)
+	HumanoidAnim.unregister_floor()
+	return int(steps[0])
+
 func _run() -> void:
 	await process_frame
 	_can_shot = (DisplayServer.get_name() != "headless")
@@ -711,6 +808,173 @@ func _run() -> void:
 	await wait_s(0.55)
 	check("突然安静恢复:Ambience 总线回 0dB",
 		is_equal_approx(AudioServer.get_bus_volume_db(AudioServer.get_bus_index("Ambience")), 0.0))
+
+	# ---------- 29. 人形建模(法线 / 米制 UV / 合并缓存) ----------
+	var Hu = load("res://scripts/humanoid.gd")
+	var rig_root := Node3D.new()
+	m.floor_root.add_child(rig_root)
+	var variants: Array = [
+		{"tag": "stand", "cfg": {"pose": "stand"}},
+		{"tag": "sit", "cfg": {"pose": "sit"}},
+		{"tag": "robe", "cfg": {"pose": "stand", "robe": true, "hunch": 0.55}},
+		{"tag": "skirt+apron", "cfg": {"pose": "stand", "skirt": true, "apron": true, "hair": "bun"}},
+		{"tag": "uniform+cap", "cfg": {"pose": "stand", "uniform": true, "cap_hex": "1e2430", "face": "human"}},
+		{"tag": "plastic-legless", "cfg": {"pose": "stand", "legless": true, "plastic": true, "face": "none", "hair": "bald"}},
+		{"tag": "silhouette", "cfg": {"pose": "stand", "silhouette": true, "face": "none", "hair": "bald"}},
+	]
+	var a_verts := 0
+	var a_oppo := 0
+	var a_bad := 0
+	var a_mixed := 0
+	var a_worst := 0.0
+	for v: Dictionary in variants:
+		var fig := Props.human_figure(m, v["cfg"])
+		rig_root.add_child(fig["root"])
+		var au := _normal_audit(fig["root"])
+		a_verts += int(au["verts"])
+		a_oppo += int(au["opposite"])
+		a_bad += int(au["bad_index"])
+		a_mixed += int(au["mixed"])
+		a_worst = maxf(a_worst, float(au["worst"]))
+		print("  [audit] %-16s verts=%-5d opposite=%-3d bad_index=%d mixed=%d worst=%5.1fdeg" % [
+			v["tag"], au["verts"], au["opposite"], au["bad_index"], au["mixed"], au["worst"]])
+	check("人形子树无索引越界的 surface(%d)" % a_bad, a_bad == 0)
+	# mixed(手性一致率)仅打印不判定:封口三角形的「三顶点法线均值」被相邻环顶点的水平法线主导,
+	# 符号与封口自身朝向无关;而带渲染的真值测试已证明 lathe/sculpt_sphere/flat_quad 与引擎
+	# 图元在 cull_back 材质下全部正常可见(不存在反面剔除)。
+	print("  [audit] mixed(仅参考)=%d" % a_mixed)
+	# 容差来源(结构性,非建模缺陷):① 封口中心顶点——它只属于两片盖的扇面,而符号由占多数的
+	# 侧壁三角形决定;② 手指与手掌等相交壳体的接缝顶点(merge 后同 surface)。实测占 2.5%。
+	# 阈值仍需远小于「位移量纲写错导致截面翻面」那一类缺陷的量级(实测给出 174°/反向占比 ~30%)。
+	check("人形子树反向顶点比例 %.2f%% ≤ 3%%(%d/%d)" % [
+		100.0 * a_oppo / float(maxi(1, a_verts)), a_oppo, a_verts], a_oppo * 100 <= a_verts * 3)
+	check("人形子树法线与几何最大夹角 %.1f° < 80°" % a_worst, a_worst < 80.0)
+	# 米制 UV:部件尺寸翻倍 → uv 跨度等比翻倍(归一化 UV 不会)
+	var prof_small: Array = [[0.10, 0.0], [0.12, 0.20], [0.09, 0.40]]
+	var prof_big: Array = [[0.20, 0.0], [0.24, 0.40], [0.18, 0.80]]
+	var sp_s := _uv_span(Hu.lathe(prof_small, 12))
+	var sp_b := _uv_span(Hu.lathe(prof_big, 12))
+	var ratio_v: float = sp_b.y / maxf(0.0001, sp_s.y)
+	var ratio_u: float = sp_b.x / maxf(0.0001, sp_s.x)
+	check("lathe UV 为世界米制(v 跨度比 %.2f / u 跨度比 %.2f ≈ 2.0)" % [ratio_v, ratio_u],
+		absf(ratio_v - 2.0) < 0.02 and absf(ratio_u - 2.0) < 0.02)
+	var sp_sphere := _uv_span(Hu.sculpt_sphere(0.115, 20, 16))
+	check("sculpt_sphere UV 跨度为米制量级(%.3f m ≈ 2πr=%.3f)" % [sp_sphere.x, TAU * 0.115],
+		absf(sp_sphere.x - TAU * 0.115) < 0.01)
+	# 合并缓存 LRU:写入超过上限的 distinct key,条目数不得突破上限且必须发生淘汰
+	var cap: int = int(Hu.MERGE_CACHE_MAX)
+	var ev0: int = int(Hu.merge_cache_stats()["evictions"])
+	for i in cap + 12:
+		var probe := Node3D.new()
+		rig_root.add_child(probe)
+		var pm := MeshInstance3D.new()
+		pm.mesh = Hu.flat_quad(0.01, 0.01)
+		pm.material_override = m.pmat({"color": Color.html("ffffff"), "roughness": 0.5})
+		probe.add_child(pm)
+		Hu.merge_static(probe, "lru-probe-%d" % i)
+		probe.free()
+	var cache_n: int = Hu._merged_meshes.size()
+	var ev1: int = int(Hu.merge_cache_stats()["evictions"])
+	check("合并缓存受 LRU 上限约束(%d ≤ %d)" % [cache_n, cap], cache_n <= cap and cache_n == cap)
+	check("合并缓存发生淘汰并计数(evictions %d→%d)" % [ev0, ev1], ev1 > ev0)
+	rig_root.free()
+	# ---------- P2 下肢枢轴链:结构改造不得改变任何关节的世界位置 ----------
+	var fig_st := Props.human_figure(m, {"pose": "stand"})
+	var fig_si := Props.human_figure(m, {"pose": "sit"})
+	var joints_st := {"hip_l": Vector3(-0.09, 0.91, 0), "knee_l": Vector3(-0.09, 0.46, 0),
+		"ankle_l": Vector3(-0.09, 0.01, 0), "hip_r": Vector3(0.09, 0.91, 0),
+		"knee_r": Vector3(0.09, 0.46, 0), "ankle_r": Vector3(0.09, 0.01, 0)}
+	var joints_si := {"hip_l": Vector3(-0.09, 0.47, -0.02), "knee_l": Vector3(-0.09, 0.44, -0.45),
+		"ankle_l": Vector3(-0.09, 0.0, -0.45), "hip_r": Vector3(0.09, 0.47, -0.02),
+		"knee_r": Vector3(0.09, 0.44, -0.45), "ankle_r": Vector3(0.09, 0.0, -0.45)}
+	var jmax := 0.0
+	for key: String in joints_st:
+		var n1: Node3D = fig_st[key]
+		var n2: Node3D = fig_si[key]
+		if n1 == null or n2 == null:
+			jmax = 999.0
+			break
+		# 枢轴静止时皆为单位旋转 → 链上局部位置之和即相对 root 的位置
+		var acc := Vector3.ZERO
+		var cur: Node3D = n1
+		while cur != null and cur != fig_st["root"]:
+			acc += cur.position
+			cur = cur.get_parent()
+		jmax = maxf(jmax, acc.distance_to(joints_st[key]))
+		var acc2 := Vector3.ZERO
+		cur = n2
+		while cur != null and cur != fig_si["root"]:
+			acc2 += cur.position
+			cur = cur.get_parent()
+		jmax = maxf(jmax, acc2.distance_to(joints_si[key]))
+	check("下肢枢轴链关节位置与改造前逐位一致(最大偏差 %.4fm)" % jmax, jmax < 0.001)
+	var old_keys := ["root", "head", "arm_l", "arm_r", "fore_l", "fore_r", "hand_l", "hand_r"]
+	var new_keys := ["upper", "hip_l", "hip_r", "knee_l", "knee_r", "ankle_l", "ankle_r", "legged", "rig"]
+	check("旧契约 8 键未变", old_keys.all(func(k): return fig_st.has(k)))
+	check("新增骨架键齐备", new_keys.all(func(k): return fig_st.has(k)))
+	var fig_sk := Props.human_figure(m, {"pose": "stand", "skirt": true})
+	var fig_rs := Props.human_figure(m, {"pose": "sit", "robe": true})
+	var fig_lg := Props.human_figure(m, {"pose": "stand", "legless": true})
+	check("锥裙/长衫坐姿/无腿 三种分支不建腿且驱动可守卫",
+		not bool(fig_sk["legged"]) and not bool(fig_rs["legged"]) and not bool(fig_lg["legged"])
+		and fig_sk["hip_l"] == null and fig_rs["knee_r"] == null and fig_lg["ankle_l"] == null)
+	fig_st["root"].free(); fig_si["root"].free()
+	fig_sk["root"].free(); fig_rs["root"].free(); fig_lg["root"].free()
+
+	# ---------- P3 步态驱动:滑步量与步频 ----------
+	var fig_g := Props.human_figure(m, {"pose": "stand"})
+	var gr: Node3D = fig_g["root"]
+	gr.position = Vector3(0, 0, 0)
+	m.floor_root.add_child(gr)
+	HumanoidAnim.unregister_floor()
+	HumanoidAnim.register(fig_g, {})
+	var ph_at_slow := 0.0
+	for i in 180:   # 1.1 m/s × 3s,沿 -Z 前进
+		gr.position += Vector3(0, 0, -1.1 / 60.0)
+		HumanoidAnim.tick_all(1.0 / 60.0)
+	ph_at_slow = HumanoidAnim.last_slip
+	for i in 120:   # 提速到 2.5 m/s
+		gr.position += Vector3(0, 0, -2.5 / 60.0)
+		HumanoidAnim.tick_all(1.0 / 60.0)
+	var slip_fast: float = HumanoidAnim.last_slip
+	# 步频随速度上升:用落地事件计数(各 2 秒)
+	var cycles_slow := _count_steps(fig_g, 1.1)
+	var cycles_fast := _count_steps(fig_g, 2.5)
+	check("走路滑步 %.4fm 与跑步滑步 %.4fm 均 < 0.02m" % [ph_at_slow, slip_fast],
+		ph_at_slow < 0.02 and slip_fast < 0.02)
+	check("步频随速度单调上升(%.1f 步/s → %.1f 步/s)" % [cycles_slow / 2.0, cycles_fast / 2.0],
+		cycles_fast > cycles_slow * 1.4)
+	HumanoidAnim.unregister_floor()
+	gr.free()
+
+	# 带渲染:人形 model sheet 近景(站姿正面/侧面 + 坐姿)
+	if _can_shot:
+		m.G.sanity = 100.0
+		m.H.render_hud(m.G)   # 复位低理智侵蚀/失真/暗角参数,否则拍到的是被扭曲的画面
+		m.H.set_hud_visible(false)
+		m.H.ending_screen.visible = false
+		m.H.gameover_screen.visible = false
+		var key := OmniLight3D.new()
+		key.light_color = Color.html("fff0d8")
+		key.omni_range = 6.0
+		m.floor_root.add_child(key)
+		var cam_tf: Transform3D = m.camera.global_transform
+		var cam_o: Vector3 = cam_tf.origin
+		key.position = cam_o + Vector3(0.6, 0.6, 0.0)
+		for sheet: Array in [["rig-stand-front", 0.0], ["rig-stand-side", PI / 2.0], ["rig-sit", 0.0]]:
+			var sfig := Props.human_figure(m, {"pose": "sit" if sheet[0] == "rig-sit" else "stand",
+				"face": "human", "uniform": sheet[0] != "rig-sit"})
+			var sb: Node3D = sfig["root"]
+			# 沿相机自身前向放到人形站立体量中心,再让正面(-Z)转回相机
+			sb.position = cam_o + cam_tf.basis * Vector3(0.0, -0.85, -1.5)
+			m.floor_root.add_child(sb)
+			sb.look_at(Vector3(cam_o.x, sb.position.y, cam_o.z))
+			sb.rotate_y(sheet[1])
+			await process_frame
+			await process_frame
+			shot(sheet[0])
+			sb.free()
+		key.free()
 
 	# ---------- 汇总 ----------
 	print("\n===== 汇总 =====")

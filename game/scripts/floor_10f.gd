@@ -142,11 +142,9 @@ static func build(m) -> void:
 			else:
 				m.S.play_buf("click", 0.4, randf_range(0.8, 1.2))
 		if not m.G.flags.get("seat10F", false):
-			var t := Time.get_ticks_msec() * 0.001
 			for i in dummies.size():
-				var d: Node3D = dummies[i]
-				if is_instance_valid(d):
-					d.position.y = sin(t * 0.9 + i * 1.3) * 0.008
+				# 呼吸微动统一走驱动(幅度/频率/逐体相位与旧写法等价)
+				HumanoidAnim.breath_root(dummies[i], 0.008, 0.9 / TAU, i * 1.3 / TAU)
 	m.tp_list([
 		{"x": float(seat_x[empty_side_idx]), "z": 2.8, "yaw": 0.0},
 		{"x": 0.0, "z": -4.8, "yaw": 0.0},

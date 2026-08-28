@@ -542,11 +542,16 @@ static func mirror_stand(m, x: float, z: float, ry := 0.0, face_mat: Material = 
 ##   pose:"stand" 站 | "sit" 坐(座面高 0.45)| "slump" 瘫坐前倾;scale 整体缩放(1.0≈站高 1.75m)
 ##   hunch: 0~1 老年驼背;no_shadow: 全部件不投影;hair: "short"|"bun"|"bald"
 ##   face: "human" 五官 | "hollow" 凹眼张嘴(尸)| "blank" 无脸白板 | "none" 光脸(假人)
+##         | "blurred" 五官可辨但糊成一片(管理员老周,见《09-视听设计/美术风格指南》第四节)
+##   alpha: 0.05~1 整体半透明(怨灵用;烘进 albedo,不影响其他使用者)
 ##   robe: 长衫裙摆遮腿;skirt: 锥裙遮腿;legless: 仅上半身(髋为根,供底座挂载)
 ##   plastic: 光面清漆材质(假人/教学模型);cap_hex: 非空则戴保安帽;其余为配色 hex
-##   新增:apron 围裙(配 skirt)| polo 网管服(领座+短袖)| uniform 保安服细节 |
-##        silhouette 黑色剪影体(unshaded 半透明,sil_alpha 控透明度)
-## 返回 {"root","head","arm_l","arm_r","fore_l","fore_r","hand_l","hand_r"}
+##   apron 围裙(配 skirt)| polo 网管服(领座+短袖)| uniform 保安服细节 |
+##   silhouette 黑色剪影体(unshaded 半透明,sil_alpha 控透明度)
+## 返回:旧契约 8 键 {root,head,arm_l/r,fore_l/r,hand_l/r} 语义不变;新增骨架键
+##   upper(躯干枢轴,呼吸/俯仰应挂这里)、hip_l/r、knee_l/r、ankle_l/r(踝兼作脚锚点)、
+##   legged(是否建腿)、rig{scale,pose,stride,heel}。
+##   robe 坐姿 / skirt / legless 三种分支**不建腿** → 下肢枢轴为 null,驱动需自行守卫。
 static func human_figure(m, cfg := {}) -> Dictionary:
 	return Humanoid.build(m, cfg)
 
