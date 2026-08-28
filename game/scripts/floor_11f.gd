@@ -101,7 +101,7 @@ static func build(m) -> void:
 		if state["cold_t"] > 6.0:
 			state["cold_t"] = 0.0
 			m.change_sanity(-4.0)
-			m.S.whisper()
+			m.S.play_at("whisper", Vector3(0, 1.2, -5.0), 1.0)   # 声从坛上传来
 			if state["cold_msg_cd"] <= 0.0:
 				state["cold_msg_cd"] = 12.0
 				m.H.show_msg("整层在变冷。呼吸凝成白雾——坛上刻着\"空手上坛者,坛自取之\"。理智 −4", 4.6)

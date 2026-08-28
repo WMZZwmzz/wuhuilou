@@ -64,7 +64,7 @@ static func build(m) -> void:
 			m.G.flags["city12F"] = true
 			m.change_sanity(-8.0)
 			m.H.red_flash()
-			m.S.thud()
+			m.S.play_at("thud", Vector3(0, 2.5, -12.0), 1.3)   # 声从雾中那栋楼的方向来
 			m.H.show_msg("雾散开一角——对面立着的就是这栋楼,十三层,灯火通明。\n你所在的这层,黑着。理智 −8", 5.6)
 		else:
 			m.H.show_msg("对面那栋楼还亮着。它一直在看。")
@@ -119,7 +119,7 @@ static func build(m) -> void:
 		state["wind_t"] = state["wind_t"] - dt
 		if state["wind_t"] <= 0.0:
 			state["wind_t"] = 6.0 + randf() * 5.0
-			m.S.whisper()
+			m.S.play_at("whisper", Vector3(0, 3.0, -14.0), 0.8, randf_range(0.94, 1.06))   # 风声从雾外来
 		if not m.G.flags.get("relic12F", false):
 			state["cry_t"] = state["cry_t"] - dt
 			if state["cry_t"] <= 0.0:

@@ -196,6 +196,7 @@ const PLAYER_R := 0.35
 var shake := 0.0
 var time_acc := 0.0
 var whisper_t := 8.0
+var hall_t := 12.0      # 幻听音轨计时(弹珠/失谐铃/麻将)
 var shadow_t := 14.0
 var call_done := false
 var ending_idx := 0
@@ -353,6 +354,7 @@ func _settle(dt: float) -> void:
 		time_acc -= 6.0
 		add_game_minutes(1)
 	S.heart(G.sanity < 50.0 and not G.modal_open, 700 if G.sanity < 25.0 else 1000)
+	S.update_mood(G.sanity)
 
 # ---------- 玩家 ----------
 
@@ -620,9 +622,20 @@ func update_atmosphere(dt: float) -> void:
 	if G.sanity < 75.0:
 		whisper_t -= dt
 		if whisper_t <= 0.0:
-			whisper_t = 9.0 + randf() * 8.0
+			# 50 以下"耳语加密加剧":间隔缩短
+			whisper_t = (6.0 + randf() * 4.0) if G.sanity < 50.0 else (9.0 + randf() * 8.0)
 			H.show_msg(WHISPERS[randi() % WHISPERS.size()], 3.5)
 			S.whisper()
+	# 幻听音轨(音效指南 §四 51–75 档):远处弹珠落地/失谐电梯铃/麻将碰撞,
+	# 50 以下幻听也随耳语一并加密
+	if G.sanity < 75.0:
+		hall_t -= dt
+		if hall_t <= 0.0:
+			hall_t = (8.0 + randf() * 6.0) if G.sanity < 50.0 else (12.0 + randf() * 8.0)
+			match randi() % 3:
+				0: S.play_buf("marble", randf_range(0.6, 0.9), randf_range(0.9, 1.1))
+				1: S.play_buf("ding_off", 0.6, randf_range(0.95, 1.05))
+				2: S.mahjong()
 	if G.sanity < 50.0 and not G.modal_open:
 		shadow_t -= dt
 		if shadow_t <= 0.0:
@@ -643,10 +656,11 @@ func update_atmosphere(dt: float) -> void:
 			var fade_tw := m.create_tween()
 			fade_tw.tween_interval(life)
 			fade_tw.tween_callback(func() -> void: m.free())
-			S.thud()
+			S.scratch()   # 影子实体化:金属刮擦(音效指南威胁预警音);thud 留给门/重物
 	if not call_done and (G.floor_id == "4F" or G.floor_id == "7F") and G.sanity < 85.0 and not G.modal_open:
 		if randf() < dt * 0.02:
 			call_done = true
+			S.hush(1.5)   # 高潮前突然安静:呼唤贴上后颈前,楼里先静下来
 			open_modal({
 				"title": "背后有人叫你",
 				"body": "声音贴着你的后颈:\n\"……小砚……回头看看……\"\n\n(楼道规则一:听见背后有人叫你名字,不要回头,直到你数到七。)",
@@ -753,6 +767,7 @@ func _arrive(f: String) -> void:
 
 func run_anomaly(cb: Callable) -> void:
 	var a: Dictionary = ANOMALIES[randi() % ANOMALIES.size()]
+	S.hush(0.9)   # 异常显形前先抽掉环境声
 	S.thud()
 	var choices: Array = []
 	for c: Dictionary in a["choices"]:
@@ -1127,6 +1142,7 @@ func game_over(reason: String) -> void:
 	S.heart(false, 0)
 	S.drone(false)
 	S.elevator_ride(false)
+	S.update_mood(100.0)   # 复位动态状态机:死亡画面不再带低理智的闷/失真
 
 func _on_retry() -> void:
 	H.gameover_screen.visible = false
@@ -1152,6 +1168,7 @@ func start_ending(id := "true") -> void:
 	ending_idx = 0
 	S.heart(false, 0)
 	S.drone(false)
+	S.update_mood(100.0)   # 结局配乐(八音盒)不被低理智的闷化/失真盖住
 	if id == "true":
 		S.music_box()
 

@@ -134,7 +134,13 @@ static func build(m) -> void:
 		state["clink_t"] = state["clink_t"] - dt
 		if state["clink_t"] <= 0.0:
 			state["clink_t"] = 10.0 + randf() * 10.0
-			m.S.play_buf("click", 0.4, randf_range(0.8, 1.2))
+			# 瓷器轻响:从随便一位"宾客"的席位传来
+			var ds: Array = dummies.filter(func(d: Node3D) -> bool: return is_instance_valid(d))
+			if not ds.is_empty():
+				var d0: Node3D = ds[randi() % ds.size()]
+				m.S.play_at("click", d0.position + Vector3(0, 1.1, 0), 0.5, randf_range(0.8, 1.2))
+			else:
+				m.S.play_buf("click", 0.4, randf_range(0.8, 1.2))
 		if not m.G.flags.get("seat10F", false):
 			var t := Time.get_ticks_msec() * 0.001
 			for i in dummies.size():

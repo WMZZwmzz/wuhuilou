@@ -146,7 +146,7 @@ static func build(m) -> void:
 					shadow.position = m.player_pos + m.cam_forward() * 5.0 + Vector3(0, 1.0, 0)
 					if not state["shadow_msg"]:
 						state["shadow_msg"] = true
-						m.S.thud()
+						m.S.play_at("thud", shadow.position, 1.3)
 						m.H.show_msg("镜中的影子脱离了你,站在光的边界之外。\n黑暗里,它开始走来。", 4.6)
 				var dir: Vector3 = m.player_pos - shadow.position
 				dir.y = 0.0

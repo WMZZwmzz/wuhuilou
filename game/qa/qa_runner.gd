@@ -682,6 +682,36 @@ func _run() -> void:
 	check("结局画面出现且无死亡画面顶盖",
 		m.H.ending_screen.visible and not m.H.gameover_screen.visible and m.G.deaths == d_end and not m.G.playing)
 
+	# ---------- 28. 音频动态(状态机 / 空间化 / 突然安静) ----------
+	check("动态音效素材齐备(合成或外部)",
+		m.S.has("keys") and m.S.has("scratch") and m.S.has("marble") and m.S.has("ding_off")
+		and m.S.has("drip") and m.S.has("elevator_ride") and m.S.has("rumble"))
+	check("新外部素材已导入(keys/marble 变体组 + scratch)",
+		m.S._bufs["keys"] is Array and m.S._bufs["marble"] is Array and m.S._bufs["scratch"] is AudioStream)
+	var mfx: AudioEffectLowPassFilter = AudioServer.get_bus_effect(AudioServer.get_bus_index("Master"), 0)
+	m.S.update_mood(40.0)
+	check("低理智:Master 低通截止下探(%dHz)" % int(mfx.cutoff_hz), mfx.cutoff_hz < 20000.0)
+	check("低理智:SFX 失真开启", AudioServer.is_bus_effect_enabled(AudioServer.get_bus_index("SFX"), 0))
+	m.S.update_mood(10.0)
+	check("濒理智:低频轰鸣已起", m.S._rumble.playing and m.S._rumble_on)
+	m.S.update_mood(100.0)
+	check("理智回满:失真关闭且轰鸣退出(muffle 复位 %dHz)" % int(mfx.cutoff_hz),
+		not AudioServer.is_bus_effect_enabled(AudioServer.get_bus_index("SFX"), 0)
+		and not m.S._rumble_on and mfx.cutoff_hz > 20000.0)
+	var at_n: int = m.S._pool3d.size()
+	m.S.play_at("scratch", Vector3(3.0, 1.2, -2.0), 0.5)
+	var at_playing: bool = false
+	for p3: AudioStreamPlayer3D in m.S._pool3d:
+		if p3.playing and p3.global_position.distance_to(Vector3(3.0, 1.2, -2.0)) < 0.01:
+			at_playing = true
+	check("空间音:3D 播放器定位正确且池不增员", at_playing and m.S._pool3d.size() == at_n)
+	m.S.hush(0.4)
+	check("突然安静:Ambience 总线压低",
+		AudioServer.get_bus_volume_db(AudioServer.get_bus_index("Ambience")) < -10.0)
+	await wait_s(0.55)
+	check("突然安静恢复:Ambience 总线回 0dB",
+		is_equal_approx(AudioServer.get_bus_volume_db(AudioServer.get_bus_index("Ambience")), 0.0))
+
 	# ---------- 汇总 ----------
 	print("\n===== 汇总 =====")
 	check("外部音效资源加载 ≥12 项(实际 %d,若为 0 检查 --import)" % m.S.ext_loaded, m.S.ext_loaded >= 12)

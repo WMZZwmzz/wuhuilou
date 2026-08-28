@@ -100,13 +100,14 @@ static func build(m) -> void:
 			"body": "一、档案只可查阅,不可带出。\n\n二、死亡日期为\"明天\"的档案,请放回原处,勿念出声。\n\n三、闭馆后请沿灯亮的柜间行走。",
 			"choices": [{"text": "记住了", "fn": func() -> void: m.close_modal()}],
 		}), 2.0)
-	# 楼层逻辑:柜门弹开声 + 灯管闪烁靠 lights flicker 自带
+	# 楼层逻辑:柜门弹开声(随机一列柜) + 灯管闪烁靠 lights flicker 自带
+	var cab_x: Array = [-6.0, -2.0, 2.0]
 	var state := {"thud_t": 6.0}
 	m.floor_update = func(dt: float) -> void:
 		state["thud_t"] = state["thud_t"] - dt
 		if state["thud_t"] <= 0.0:
 			state["thud_t"] = 7.0 + randf() * 9.0
-			m.S.thud()
+			m.S.play_at("thud", Vector3(cab_x[randi() % cab_x.size()], 1.2, -3.9), 1.3)
 			if randf() < 0.3:
 				m.H.show_msg("哪个柜门\"咣\"地弹开一条缝,又自己合上了。", 3.2)
 	m.tp_list([

@@ -161,7 +161,7 @@ static func build(m) -> void:
 		drip_t -= dt
 		if drip_t <= 0.0:
 			drip_t = 5.0 + randf() * 9.0
-			m.S.play_buf("drip", 1.5)
+			m.S.play_at("drip", Vector3(0, 2.0, -2.0), 1.5)   # 教学模型旁的水声
 		if m.G.flags.get("mannGone", false) or not is_instance_valid(mann):
 			return
 		var to_m: Vector3 = mann.position - m.player_pos

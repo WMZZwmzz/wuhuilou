@@ -88,7 +88,8 @@ static func build(m) -> void:
 			return
 		state["mode"] = "invest"
 		state["invest_t"] = 10.0
-		m.S.play_buf("ding", 1.2, 0.7)
+		# 警报声从西角卷帘门方向传来(老周随即去查)
+		m.S.play_at("ding", Vector3(NOISE_POINT.x, 1.0, NOISE_POINT.z), 1.2, 0.7)
 		m.H.show_msg("你按下对讲机的警报键——西角的卷帘门\"哗啦\"响了一声。\n钥匙串的声音,朝那边去了。", 4.6)
 	m.add_inter(Vector3(8.6, 1.1, 4.8), "值班亭对讲机", talk_cb, 2.0)
 	# 老周腰间的钥匙串:仅\"查噪背身\"窗口可取
@@ -126,7 +127,7 @@ static func build(m) -> void:
 				if is_instance_valid(cl):
 					cl.visible = (i == li)   # 明灭切换用整灯 visible,能量恒 1.4
 			if randf() < 0.4:
-				m.S.click()
+				m.S.play_at("click", Vector3(car_poses[li][0], 0.9, car_poses[li][1] + (1.9 if car_poses[li][2] < PI else -1.9)), 0.5)
 		if not is_instance_valid(zhou):
 			return
 		if m.G.flags.get("keysTaken", false):
@@ -136,11 +137,14 @@ static func build(m) -> void:
 		var to_p: Vector3 = m.player_pos - zhou.position
 		to_p.y = 0.0
 		var d := to_p.length()
-		# 钥匙串预警音:越近越密
+		# 钥匙串预警音(音效指南:管理员=钥匙串碰撞):3D 空间播放,越近越密也越响;
+		# 两声轻击错开 ~80ms + 随机变体,听感为"哗啦"一串
 		state["jingle_t"] = state["jingle_t"] - dt
 		if state["jingle_t"] <= 0.0 and d < 12.0:
 			state["jingle_t"] = clampf(d / 6.0, 0.35, 1.6)
-			m.S.play_buf("click", clampf(2.2 - d / 8.0, 0.5, 1.6), 1.5)
+			var jpos: Vector3 = zhou.position + Vector3(0, 1.0, 0)
+			m.S.play_at("keys", jpos, 1.0)
+			m.after(0.08, func() -> void: m.S.play_at("keys", jpos, 0.7))
 		match state["mode"]:
 			"patrol":
 				var wp: Vector3 = wps[state["wp"]]

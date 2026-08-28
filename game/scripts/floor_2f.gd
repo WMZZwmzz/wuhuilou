@@ -153,7 +153,7 @@ static func build(m) -> void:
 		mj_t -= dt
 		if mj_t <= 0.0:
 			mj_t = 3.0 + randf() * 6.0
-			m.S.mahjong()
+			m.S.play_at("mahjong", Vector3(0, 1.0, -0.6), randf_range(0.5, 0.85), randf_range(0.88, 1.12))
 		if m.G.flags.get("mjSolved", false) or state["turned"]:
 			return
 		var d := Vector2(m.player_pos.x, m.player_pos.z + 1.5).length()

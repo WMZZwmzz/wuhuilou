@@ -14,6 +14,9 @@ wav 均已由原始 24bit/float32 转换为 16bit PCM 并做响度标准化
 | `flash.ogg` | 手电开关 | 同上(switch_004) | Kenney | CC0 |
 | `thud.ogg` | 影子人/电梯闷响 | Kenney Impact Sounds(impactSoft_heavy_000) | Kenney | CC0 |
 | `footstep_0..4.ogg` | 楼道脚步 ×5 变体 | Kenney Impact Sounds(footstep_concrete_000..004) | Kenney | CC0 |
+| `keys_0..4.ogg` | B1 管理员钥匙串预警 ×5 变体 | Kenney Impact Sounds(impactMetal_light_000..004) | Kenney | CC0 |
+| `marble_0..2.ogg` | 幻听弹珠落地 ×3 变体 | Kenney Impact Sounds(impactGlass_light_000..002) | Kenney | CC0 |
+| `scratch.wav` | 影子实体化金属刮擦(1.7s,裁自 2.2s 段) | [31 pings and metal filing sounds](https://opengameart.org/content/31-pings-and-metal-filing-sounds)(Marker #12) | bart | CC0 |
 | `sting.wav` | 惊吓刺音 | [Horror Sound Effects Library](https://opengameart.org/content/horror-sound-effects-library)(Stab_Knife_00) | Little Robot Sound Factory | CC-BY 3.0 ¹ |
 | `whisper_0..5.wav` | 低理智耳语/呼吸 ×6 变体 | 同上(Breath_Scared_00..05) | Little Robot Sound Factory | CC-BY 3.0 ¹ |
 | `drone.wav` | 常驻环境低鸣(60s 循环) | 同上(Ambience_MonstersBelly_00) | Little Robot Sound Factory | CC-BY 3.0 ¹ |
@@ -28,4 +31,9 @@ wav 均已由原始 24bit/float32 转换为 16bit PCM 并做响度标准化
 域名已失效,署名链接指向 OpenGameArt 资源页。
 
 仍然程序化合成的音效:`sting_n`(刺音噪声层)、`mahjong`(麻将碰撞,
-含音高/节奏随机化)、外部资源全部缺失时的回退音(`scripts/sfx.gd`)。
+含音高/节奏随机化)、`ding_off`(幻听失谐铃)、`rumble`(低理智低频轰鸣,
+38/39.2Hz 拍频环接)、外部资源全部缺失时的回退音(`scripts/sfx.gd`)。
+
+2026-08-28 二批(动态状态机/空间音频):新增 `keys_*` / `marble_*` /
+`scratch` 外部资源与 `ding_off` / `rumble` 外部键位——后两者暂无合适
+CC0 资源,键位已留好,放入同名文件即可自动替换合成音。

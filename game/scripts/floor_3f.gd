@@ -118,7 +118,8 @@ static func build(m) -> void:
 		state["giggle_t"] = state["giggle_t"] - dt
 		if state["giggle_t"] <= 0.0:
 			state["giggle_t"] = 9.0 + randf() * 8.0
-			m.S.play_buf("music_box", 0.25, randf_range(0.9, 1.1))
+			# 童声/八音盒声从后墙教室传来(空间音)
+			m.S.play_at("music_box", Vector3(-8.6, 1.4, -7.5), 0.3, randf_range(0.9, 1.1))
 		var wp: Vector3 = wps[state["wp"]]
 		var dir: Vector3 = wp - su.position
 		dir.y = 0.0

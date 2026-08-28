@@ -82,7 +82,7 @@ static func build(m) -> void:
 							var door_drain := 10.0   # 1304 推门惊吓一次性扣值(文案同源)
 							m.change_sanity(-door_drain)
 							m.H.red_flash()
-							m.S.thud()
+							m.S.play_at("thud", Vector3(x, 1.2, z), 1.3)   # 声从这扇门后来
 							m.shake = 1.6
 							m.H.show_msg("门推开了三寸,又被什么东西从里面死死顶住。\n门缝里,一只贴着门板的眼睛缓缓闭上。理智 −%d" % int(door_drain), 5.4)},
 						{"text": "退开", "fn": func() -> void: m.close_modal()},

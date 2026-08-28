@@ -27,7 +27,7 @@ static func build(m) -> void:
 		if not m.G.flags.get("pc5F", false):
 			m.G.flags["pc5F"] = true
 			m.change_sanity(-8.0)
-			m.S.play_buf("drip", 1.0)
+			m.S.play_at("drip", Vector3(-5.5, 1.2, 2.0), 1.0)
 			m.open_modal({
 				"title": "CAM 回 放",
 				"body": "屏幕自己亮了。四分格的监控画面:\n1F 大堂——你捡手电的背影。\n2F 麻将馆——你在黑暗里摸索。\n4F 诊所——模型站在你身后半米。\n\n每一格的角落,时间戳都是\"刚刚\"。\n你一直被看着。理智 −8",
@@ -142,7 +142,7 @@ static func build(m) -> void:
 		state["hum_t"] = state["hum_t"] - dt
 		if state["hum_t"] <= 0.0:
 			state["hum_t"] = 11.0 + randf() * 9.0
-			m.S.play_buf("drip", 0.8, randf_range(0.7, 0.9))
+			m.S.play_at("drip", Vector3(-8.3, 1.0, -6.2), 0.8, randf_range(0.7, 0.9))   # 尸体旁的电流/滴水声
 		if not is_instance_valid(jay):
 			return
 		state["turn_t"] = state["turn_t"] - dt

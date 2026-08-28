@@ -19,6 +19,16 @@ const EXT := {
 	"drone": "res://sounds/drone.wav",
 	"elevator_ride": "res://sounds/elevator_ride.wav",
 	"drip": "res://sounds/drip.wav",
+	"keys": [
+		"res://sounds/keys_0.ogg", "res://sounds/keys_1.ogg", "res://sounds/keys_2.ogg",
+		"res://sounds/keys_3.ogg", "res://sounds/keys_4.ogg",
+	],
+	"marble": [
+		"res://sounds/marble_0.ogg", "res://sounds/marble_1.ogg", "res://sounds/marble_2.ogg",
+	],
+	"scratch": "res://sounds/scratch.wav",
+	"ding_off": "res://sounds/ding_off.wav",
+	"rumble": "res://sounds/rumble.wav",
 	"heart_slow": "res://sounds/heart_slow.wav",
 	"heart_fast": "res://sounds/heart_fast.wav",
 	"whisper": [
@@ -46,6 +56,17 @@ var _h_rate := -1
 var _h_acc := 0.0
 # 第二心音 / 叮声二连音的延迟播放:统一在 _process 排程,免每次新建 SceneTreeTimer
 var _delayed := []      # [剩余秒数, Callable]
+# 动态音频状态机(音效指南 §四):理智驱动的效果器与低频轰鸣,值缓存变化才写 AudioServer
+var _mood_sanity := -1.0
+var _muffle_fx: AudioEffectLowPassFilter = null
+var _dist_fx: AudioEffectDistortion = null
+var _rumble: AudioStreamPlayer = null
+var _rumble_on := false
+var _rumble_db := -10.0
+var _rumble_tw: Tween = null
+var _hush_left := 0.0   # "突然安静"剩余秒数,归零后在 _process 恢复 Ambience 总线
+# 空间音频:世界锚定音的 3D 播放器池(Godot 以 current Camera3D 为听者)
+var _pool3d: Array[AudioStreamPlayer3D] = []
 
 func _ready() -> void:
 	_setup_buses()
@@ -57,7 +78,16 @@ func _ready() -> void:
 	_drone = _make_loop_player("Ambience")
 	_ride = _make_loop_player("Ambience")
 	_heart_p = _make_loop_player("SFX")
+	_rumble = _make_loop_player("Ambience")
+	for i in 6:
+		var p3 := AudioStreamPlayer3D.new()
+		p3.bus = "SFX"
+		p3.unit_size = 14.0        # 衰减参考距离,45m 外归零
+		p3.max_distance = 45.0
+		add_child(p3)
+		_pool3d.append(p3)
 	_load_external()
+	var ext_rumble: bool = _bufs.has("rumble")
 	_synth_fallbacks()
 	# 外部流不自带循环:靠 finished 重播(合成 drone 自带 LOOP_FORWARD,重复 play 无害)
 	_drone.finished.connect(func() -> void:
@@ -66,12 +96,20 @@ func _ready() -> void:
 	_ride.finished.connect(func() -> void:
 		if _ride_on and not _muted:
 			_ride.play())
+	_rumble.finished.connect(func() -> void:
+		if _rumble_on and not _muted:
+			_rumble.play())
 	if _bufs.has("drone"):
 		_drone.stream = _bufs["drone"]
 		_drone.volume_db = -6.0
 	else:
 		_drone.stream = _make_drone()
 		_drone.volume_db = linear_to_db(0.05)
+	if not _bufs.has("rumble"):
+		_bufs.rumble = _make_rumble()
+	_rumble.stream = _bufs["rumble"]
+	_rumble_db = -10.0 if ext_rumble else -8.0
+	_rumble.volume_db = _rumble_db
 
 func _make_loop_player(bus: String) -> AudioStreamPlayer:
 	var p := AudioStreamPlayer.new()
@@ -92,6 +130,28 @@ func _setup_buses() -> void:
 	if not has_lim:
 		# 多个 sting/心跳叠加时防止 Master 削波爆音
 		AudioServer.add_bus_effect(mi, AudioEffectLimiter.new())
+	# 动态状态机效果器:Master 低通插在 Limiter 之前(低理智"变闷"),SFX 失真默认关。
+	# 场景重载会再进一次 _ready,按类型找已有效果器复用,避免重复堆叠
+	_muffle_fx = null
+	for i in AudioServer.get_bus_effect_count(mi):
+		var e: AudioEffect = AudioServer.get_bus_effect(mi, i)
+		if e is AudioEffectLowPassFilter:
+			_muffle_fx = e
+			break
+	if _muffle_fx == null:
+		_muffle_fx = AudioEffectLowPassFilter.new()
+		_muffle_fx.cutoff_hz = 20500.0
+		AudioServer.add_bus_effect(mi, _muffle_fx, 0)
+	var si := AudioServer.get_bus_index("SFX")
+	for i in AudioServer.get_bus_effect_count(si):
+		var e2: AudioEffect = AudioServer.get_bus_effect(si, i)
+		if e2 is AudioEffectDistortion:
+			_dist_fx = e2
+			break
+	if _dist_fx == null:
+		_dist_fx = AudioEffectDistortion.new()
+		AudioServer.add_bus_effect(si, _dist_fx)
+	AudioServer.set_bus_effect_enabled(si, AudioServer.get_bus_effect_count(si) - 1, false)
 
 func _load_external() -> void:
 	for key: String in EXT:
@@ -121,6 +181,11 @@ func _process(delta: float) -> void:
 			_h_acc = 0.0
 			play_buf("heart1", 0.28)
 			_delay(0.18, func(): play_buf("heart2", 0.2))
+	# "突然安静"到期恢复 Ambience 总线
+	if _hush_left > 0.0:
+		_hush_left -= delta
+		if _hush_left <= 0.0:
+			AudioServer.set_bus_volume_db(AudioServer.get_bus_index("Ambience"), 0.0)
 
 ## 秒级延迟回调(_process 排程;Sfx 常驻节点,生命周期与场景一致)
 func _delay(sec: float, fn: Callable) -> void:
@@ -206,6 +271,95 @@ func _synth_mahjong() -> AudioStreamWAV:
 		b.encode_s16(i * 2, v)
 	return _wav(b)
 
+func _synth_keys() -> AudioStreamWAV:
+	# 钥匙串碰撞:比麻将更密、更高频的金属脉冲簇
+	var pulses: Array = []
+	var t := 0.0
+	for i in 6 + randi() % 4:
+		var d := 0.008 + randf() * 0.01
+		pulses.append([t, d, 0.16 + randf() * 0.14])
+		t += d + 0.015 + randf() * 0.05
+	var n := int((t + 0.06) * SR)
+	var b := PackedByteArray()
+	b.resize(n * 2)
+	var lp1 := 0.0
+	var lp2 := 0.0
+	var a1 := 1.0 - exp(-TAU * 7600.0 / SR)
+	var a2 := 1.0 - exp(-TAU * 2600.0 / SR)
+	for i in n:
+		var time := i / float(SR)
+		var x := randf() * 2.0 - 1.0
+		lp1 += a1 * (x - lp1)
+		lp2 += a2 * (lp1 - lp2)
+		var s: float = lp1 - lp2
+		var env := 0.0
+		for pu: Array in pulses:
+			var dt: float = time - pu[0]
+			if dt >= 0.0 and dt < pu[1]:
+				env = maxf(env, (dt / pu[1]) * pow(0.001, dt / pu[1]) * pu[2])
+		var v := int(_clamp01(s * env) * 32767.0)
+		b.encode_s16(i * 2, v)
+	return _wav(b)
+
+func _synth_scratch() -> AudioStreamWAV:
+	# 金属刮擦:高频带通噪声 + ~14Hz 幅度颤动(刮擦的涩感),1.2s 渐弱
+	var dur := 1.2
+	var n := int(dur * SR)
+	var b := PackedByteArray()
+	b.resize(n * 2)
+	var lp1 := 0.0
+	var lp2 := 0.0
+	var a1 := 1.0 - exp(-TAU * 5200.0 / SR)
+	var a2 := 1.0 - exp(-TAU * 1800.0 / SR)
+	for i in n:
+		var t := i / float(SR)
+		var x := randf() * 2.0 - 1.0
+		lp1 += a1 * (x - lp1)
+		lp2 += a2 * (lp1 - lp2)
+		var s: float = lp1 - lp2
+		var trem := 0.55 + 0.45 * sin(TAU * 14.0 * t + sin(TAU * 3.1 * t) * 1.5)
+		var env: float = minf(t / 0.06, 1.0) * trem * pow(0.0002, t / dur)
+		var v := int(_clamp01(s * env * 0.5) * 32767.0)
+		b.encode_s16(i * 2, v)
+	return _wav(b)
+
+func _synth_marble() -> AudioStreamWAV:
+	# 弹珠落地:硬质初击 + 2 次递减反弹(间隔渐大、音量渐小)
+	var bounces := [[0.0, 0.5], [0.11, 0.28], [0.24, 0.15]]
+	var n := int(0.5 * SR)
+	var b := PackedByteArray()
+	b.resize(n * 2)
+	for bo: Array in bounces:
+		var start := int(bo[0] * SR)
+		var peak: float = bo[1]
+		var f := 2000.0 + randf() * 600.0
+		var dur := 0.045
+		for i in int(dur * SR):
+			var idx := start + i
+			if idx >= n:
+				break
+			var t := i / float(SR)
+			var s := sin(TAU * f * t) * pow(0.0005, t / dur) * peak
+			var cur := b.decode_s16(idx * 2) / 32767.0
+			b.encode_s16(idx * 2, int(_clamp01(cur + s) * 32767.0))
+	return _wav(b)
+
+func _synth_ding_off() -> AudioStreamWAV:
+	# 失谐铃:655/661Hz 差拍 + 缓慢下滑 + 八度泛音,电梯铃"发不对"的错觉
+	var dur := 1.1
+	var n := int(dur * SR)
+	var b := PackedByteArray()
+	b.resize(n * 2)
+	for i in n:
+		var t := i / float(SR)
+		var env := pow(0.0004, t / dur)
+		var f1 := 655.0 + t * 6.0
+		var s := (sin(TAU * f1 * t) + sin(TAU * 661.0 * t)) * 0.4 * env
+		s += sin(TAU * f1 * 2.01 * t) * 0.12 * env
+		var v := int(_clamp01(s * 0.35) * 32767.0)
+		b.encode_s16(i * 2, v)
+	return _wav(b)
+
 func _make_drone() -> AudioStreamWAV:
 	var dur := 8.0
 	var n := int(dur * SR)
@@ -237,6 +391,67 @@ func _make_drone() -> AudioStreamWAV:
 	w.loop_end = n
 	return w
 
+func _make_rumble() -> AudioStreamWAV:
+	# 低频轰鸣:38/39.2Hz 拍频 + 0.4Hz 起伏(比 drone 更低、更"压胸"),8s 环接
+	var dur := 8.0
+	var n := int(dur * SR)
+	var b := PackedByteArray()
+	b.resize(n * 2)
+	var p1 := 0.0
+	var p2 := 0.0
+	var samples := PackedFloat32Array()
+	samples.resize(n)
+	for i in n:
+		var t := i / float(SR)
+		p1 += TAU * 38.0 / SR
+		p2 += TAU * 39.2 / SR
+		var swell := 0.7 + 0.3 * sin(TAU * 0.4 * t)
+		samples[i] = (sin(p1) + sin(p2)) * 0.5 * swell * 0.35
+	var xf := int(0.05 * SR)       # 环接交叉淡化,消除循环咔哒
+	for i in n:
+		var s := samples[i]
+		if i < xf:
+			var tail := samples[n - xf + i]
+			var k := i / float(xf)
+			s = s * k + tail * (1.0 - k)
+		var v := int(_clamp01(s) * 32767.0)
+		b.encode_s16(i * 2, v)
+	var w := _wav(b)
+	w.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	w.loop_begin = 0
+	w.loop_end = n
+	return w
+
+func _make_hum() -> AudioStreamWAV:
+	# 乘梯嗡鸣回退:110/220Hz 电机哼声 + 轻噪声,4s 环接
+	var dur := 4.0
+	var n := int(dur * SR)
+	var b := PackedByteArray()
+	b.resize(n * 2)
+	var lp := 0.0
+	var a := 1.0 - exp(-TAU * 300.0 / SR)
+	var xf := int(0.05 * SR)
+	var samples := PackedFloat32Array()
+	samples.resize(n)
+	for i in n:
+		var t := i / float(SR)
+		lp += a * ((randf() * 2.0 - 1.0) - lp)
+		var wob := 1.0 + 0.02 * sin(TAU * 0.6 * t)
+		samples[i] = (sin(TAU * 110.0 * t) * 0.4 + sin(TAU * 220.0 * t) * 0.18) * wob + lp * 0.03
+	for i in n:
+		var s := samples[i]
+		if i < xf:
+			var tail := samples[n - xf + i]
+			var k := i / float(xf)
+			s = s * k + tail * (1.0 - k)
+		var v := int(_clamp01(s * 0.5) * 32767.0)
+		b.encode_s16(i * 2, v)
+	var w := _wav(b)
+	w.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	w.loop_begin = 0
+	w.loop_end = n
+	return w
+
 func _wav(b: PackedByteArray) -> AudioStreamWAV:
 	var w := AudioStreamWAV.new()
 	w.format = AudioStreamWAV.FORMAT_16_BITS
@@ -259,6 +474,12 @@ func _synth_fallbacks() -> void:
 	if not _bufs.has("heart2"): _bufs.heart2 = _tone(50.0, "sine", 0.01, 0.14, 0.2)
 	if not _bufs.has("footstep"): _bufs.footstep = _noise(0.09, 0.05, 50.0, 220.0)
 	if not _bufs.has("mahjong"): _bufs.mahjong = _synth_mahjong()
+	if not _bufs.has("keys"): _bufs.keys = _synth_keys()
+	if not _bufs.has("scratch"): _bufs.scratch = _synth_scratch()
+	if not _bufs.has("marble"): _bufs.marble = _synth_marble()
+	if not _bufs.has("ding_off"): _bufs.ding_off = _synth_ding_off()
+	if not _bufs.has("drip"): _bufs.drip = _tone(2600.0, "sine", 0.002, 0.12, 0.14, 1400.0)
+	if not _bufs.has("elevator_ride"): _bufs.elevator_ride = _make_hum()
 	for f in [660.0, 587.0, 523.0, 587.0, 660.0, 880.0]:
 		var k := "mb_%d" % int(f)
 		if not _bufs.has(k):
@@ -277,6 +498,7 @@ func toggle_mute() -> bool:
 		_drone.stop()
 		_ride.stop()
 		_heart_p.stop()
+		_rumble.stop()
 	else:
 		if _drone_on:
 			_drone.play()
@@ -284,22 +506,44 @@ func toggle_mute() -> bool:
 			_ride.play()
 		if _heart_key != "":
 			_heart_p.play()
+		if _rumble_on:
+			_rumble.volume_db = _rumble_db
+			_rumble.play()
 	return _muted
+
+func _pick(key: String) -> AudioStream:
+	var entry: Variant = _bufs[key]
+	if entry is Array:
+		return entry[randi() % entry.size()]
+	return entry
 
 func play_buf(name: String, vol: float = 1.0, pitch: float = 1.0) -> void:
 	if _muted or not _bufs.has(name):
 		return
-	var entry: Variant = _bufs[name]
-	var stream: AudioStream
-	if entry is Array:
-		stream = entry[randi() % entry.size()]
-	else:
-		stream = entry
+	var stream := _pick(name)
 	for p in _pool:
 		if not p.playing:
 			_start(p, stream, vol, pitch)
 			return
 	_start(_pool[0], stream, vol, pitch)
+
+## 世界锚定音:3D 空间播放(相机为听者,距离/方位自动衰减);事件惊吓音与 UI 音仍走 play_buf
+func play_at(key: String, pos: Vector3, vol: float = 1.0, pitch: float = 1.0) -> void:
+	if _muted or not _bufs.has(key):
+		return
+	var stream := _pick(key)
+	for p in _pool3d:
+		if not p.playing:
+			_start_at(p, stream, pos, vol, pitch)
+			return
+	_start_at(_pool3d[0], stream, pos, vol, pitch)
+
+func _start_at(p: AudioStreamPlayer3D, stream: AudioStream, pos: Vector3, vol: float, pitch: float) -> void:
+	p.stream = stream
+	p.global_position = pos
+	p.volume_db = linear_to_db(maxf(vol, 0.0002))
+	p.pitch_scale = pitch
+	p.play()
 
 func _start(p: AudioStreamPlayer, stream: AudioStream, vol: float, pitch: float) -> void:
 	p.stream = stream
@@ -332,6 +576,59 @@ func play_step(running: bool) -> void:
 
 func mahjong() -> void:
 	play_buf("mahjong", randf_range(0.5, 0.85), randf_range(0.88, 1.12))
+
+func scratch() -> void:
+	play_buf("scratch", 1.1, randf_range(0.92, 1.08))
+
+## 素材键是否可用(QA 断言用;play_buf 缺键是静默失败)
+func has(name: String) -> bool:
+	return _bufs.has(name)
+
+## ---------- 动态音频状态机(音效指南 §四) ----------
+## 理智驱动:>60 干净;50–26 SFX 轻失真;25 以下失真保留 + 低频轰鸣渐入;
+## 60 以下声音渐"闷"(Master 低通),≤10 约剩 700Hz —— 理智 0 时"全部声音拉远变闷"。
+## 值缓存:理智变化 ≥0.5 才写 AudioServer,连续掉理智时写参数频率有上限。
+func update_mood(sanity: float) -> void:
+	sanity = clampf(sanity, 0.0, 100.0)
+	if _mood_sanity >= 0.0 and absf(sanity - _mood_sanity) < 0.5:
+		return
+	_mood_sanity = sanity
+	var muffle := clampf((60.0 - sanity) / 50.0, 0.0, 1.0)
+	_muffle_fx.cutoff_hz = lerpf(20500.0, 700.0, muffle)
+	# SFX 失真:50–26 轻度,25 以下加深(4.7 的 drive 为 0..1 线性值)
+	var want_drive := 0.5 if sanity < 25.0 else (0.3 if sanity < 50.0 else 0.0)
+	if not is_equal_approx(_dist_fx.drive, want_drive):
+		_dist_fx.drive = want_drive
+	var si := AudioServer.get_bus_index("SFX")
+	var want_on: bool = want_drive > 0.0
+	if AudioServer.is_bus_effect_enabled(si, 0) != want_on:
+		AudioServer.set_bus_effect_enabled(si, 0, want_on)
+	_set_rumble(sanity < 25.0)
+
+func _set_rumble(on: bool) -> void:
+	if _rumble_on == on:
+		return
+	_rumble_on = on
+	if _rumble_tw != null and _rumble_tw.is_valid():
+		_rumble_tw.kill()
+	_rumble_tw = null
+	if on:
+		if not _muted and not _rumble.playing:
+			_rumble.volume_db = -40.0
+			_rumble.play()
+		_rumble_tw = create_tween()
+		_rumble_tw.tween_property(_rumble, "volume_db", _rumble_db, 1.5)
+	elif _rumble.playing:
+		_rumble_tw = create_tween()
+		_rumble_tw.tween_property(_rumble, "volume_db", -40.0, 0.8)
+		_rumble_tw.tween_callback(func() -> void:
+			if not _rumble_on:
+				_rumble.stop())
+
+## "高潮前突然安静":压低 Ambience 总线,_hush_left 到期后在 _process 恢复
+func hush(sec: float = 1.2) -> void:
+	_hush_left = maxf(_hush_left, sec)
+	AudioServer.set_bus_volume_db(AudioServer.get_bus_index("Ambience"), -20.0)
 
 func heart(on: bool, rate_ms: int) -> void:
 	if not on:
@@ -384,4 +681,4 @@ func music_box() -> void:
 	var seq := [660.0, 587.0, 523.0, 587.0, 660.0, 880.0]
 	for i in seq.size():
 		var f: float = seq[i]
-		get_tree().create_timer(i * 0.45).timeout.connect(func(): play_buf("mb_%d" % int(f), 1.0))
+		_delay(i * 0.45, func(): play_buf("mb_%d" % int(f), 1.0))
