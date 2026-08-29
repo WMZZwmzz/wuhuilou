@@ -33,6 +33,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File game/qa/uicheck.ps1         
 
 改动 game/ 后必须跑无头走查,确认输出「失败项: 无 —— 全部通过 ✓」且零 `SCRIPT ERROR`。改动/新增 `game/sounds/` 下音频或 `game/textures/` 下贴图后须先跑 `--import` 再跑 QA(QA 收尾断言外部音效加载数,第 29 节断言外部贴图与建模量)。
 
+**小改动免跑**:同时满足下列条件时可以不跑 QA,并在提交说明里注明「免 QA + 原因」——
+
+- 不改行为的改动:注释、日志与弹窗措辞、说明书正文、文档内链接、安全的局部改名。
+- 只作用于单个函数内部、不外溢到结算的取值微调(某个装饰偏移、某个材质系数),且不碰 `state.NUM`。
+- 只动文档(`*.md`)、`game/qa/` 自身脚本或仓库配置(`.gitignore` 等),`game/` 玩法与资源未变。
+
+**哪怕 diff 只有几行也必须跑**: `state.NUM` 数值;光照/材质/后处理参数(会挪动截图亮度基线,须连带 `brightgrid.ps1` 与带渲染复跑);HUD 布局、控件与文案排版(`uicheck.ps1` 按像素特征断言);「Demo 内部接口」一节列出的任何名字(含 `Humanoid` 生成器函数与 QA 依赖的 cfg 键);音频与贴图的增删。判定有疑时按「跑」处理——漏跑一次回归的代价高于一次走查。
+
 ⚠️ 陷阱:`qa_runner.gd` 的 `_run()` 内一旦出现 SCRIPT ERROR,协程中断且永远走不到末尾的 `quit(0)`,**Godot 进程会静默滞留**(表现为"QA 跑了半小时没完"),判断依据是日志里缺少「失败项:」行;此时需手动结束进程,且注意 `TaskStop` 只终止外层 shell,Godot 子进程要另行 `Stop-Process`。另:headless `--script` 中调用 `PrimitiveMesh.get_surface_arrays()`(CylinderMesh/SphereMesh/BoxMesh)会挂死进程,取网格真值只能走自家 `ArrayMesh` 生成器。
 
 ## Demo 内部接口(QA 脚本依赖,勿随意改名)
