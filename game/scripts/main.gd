@@ -271,9 +271,9 @@ func _build_camera() -> void:
 	camera.add_child(viewmodel)
 	flash = SpotLight3D.new()
 	flash.light_color = Color.html("fff2d0")
-	flash.spot_range = 22.0
-	flash.spot_angle = 24.0
-	flash.light_energy = 6.0
+	flash.spot_range = 32.0
+	flash.spot_angle = 34.0
+	flash.light_energy = 15.0
 	flash.shadow_enabled = true
 	flash.position = Vector3(0, 0.02, -0.16)
 	viewmodel.add_child(flash)
